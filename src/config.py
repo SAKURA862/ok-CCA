@@ -10,8 +10,8 @@ app_profile = os.environ.get("PYAPPIFY_APP_PROFILE", "")
 gui_config = {
     'type': 'web' if app_profile.casefold() == 'web' else 'qt',
     'window_size': {
-        'width': 1200,
-        'height': 800,
+        'width': 1360,
+        'height': 900,
         'min_width': 600,
         'min_height': 450,
     },
@@ -78,19 +78,19 @@ config = {
             'use_openvino': True,
         }
     },
-    'windows': {  # Windows游戏请填写此设置
-        #'exe': ['StarRail.exe'],
-        # optional, if set, will search the exe only
-        # 'hwnd_class': 'UnrealWindow', #增加重名检查准确度
-        'interaction': ['Pynput', 'PostMessage', 'Genshin', 'PyDirect','ForegroundPostMessage'], # Genshin:某些操作可以后台, 部分游戏支持 PostMessage:可后台点击, 极少游戏支持 ForegroundPostMessage:前台使用PostMessage Pynput/PyDirect:仅支持前台使用
-        'capture_method': ['WGC', 'BitBlt_RenderFull', 'BitBlt'],  # Windows版本支持的话, 优先使用WGC, 否则使用BitBlt_Full. 支持的capture有 BitBlt, WGC, BitBlt_RenderFull, DXGI
-        'check_hdr': False, #当用户开启AutoHDR时候提示用户, 但不禁止使用
-        'force_no_hdr': False, #True=当用户开启AutoHDR时候禁止使用
-        'require_bg': True # 要求使用后台截图
-    },
+    # 'windows': {  # Windows游戏请填写此设置
+    #     #'exe': ['StarRail.exe'],
+    #     # optional, if set, will search the exe only
+    #     # 'hwnd_class': 'UnrealWindow', #增加重名检查准确度
+    #     'interaction': ['Pynput', 'PostMessage', 'Genshin', 'PyDirect','ForegroundPostMessage'], # Genshin:某些操作可以后台, 部分游戏支持 PostMessage:可后台点击, 极少游戏支持 ForegroundPostMessage:前台使用PostMessage Pynput/PyDirect:仅支持前台使用
+    #     'capture_method': ['WGC', 'BitBlt_RenderFull', 'BitBlt'],  # Windows版本支持的话, 优先使用WGC, 否则使用BitBlt_Full. 支持的capture有 BitBlt, WGC, BitBlt_RenderFull, DXGI
+    #     'check_hdr': False, #当用户开启AutoHDR时候提示用户, 但不禁止使用
+    #     'force_no_hdr': False, #True=当用户开启AutoHDR时候禁止使用
+    #     'require_bg': True # 要求使用后台截图
+    # },
     'adb': {  # 模拟器或Android设备请填写此设置, mumu模拟器使用原生截图和input,速度极快. 其他模拟器和真机使用adb,截图速度较慢
-        # optional, if set, will start the pacakge and ensure installed
-        #'packages': ['com.abc.efg1', 'com.abc.efg1']
+        # 'packages': ['com.example.game'],  # 启动任务时确保该游戏已安装, 并把它切到前台
+        # 'capture_method': ['adb', 'ipc'],  # MuMu 12 支持 ipc 原生截图, 否则退回 adb 截图
     },
     # 'browser': {  # 浏览器游戏请填写此设置；windows、adb、browser 至少配置一个，也可以同时配置多个
     #     'url': 'https://example.com/game',
@@ -114,7 +114,7 @@ config = {
             }
         },
     'screenshots_folder': "screenshots", #截图存放目录, 每次重新启动会清空目录
-    'gui_title': 'ok-script-app',  #窗口名
+    'gui_title': '卡提那小助手',  #窗口名
     'template_matching': { # 可选, 如使用OpenCV的模板匹配
         'coco_feature_json': os.path.join('assets', 'coco_annotations.json'), #coco格式标记, 需要png图片, 在debug模式运行后, 会对进行切图仅保留被标记部分以减少图片大小
         'default_horizontal_variance': 0.002, #默认x偏移, 查找不传box的时候, 会根据coco坐标, match偏移box内的
@@ -123,6 +123,10 @@ config = {
     },
     'version': version, #版本
     'my_app': ['src.globals', 'Globals'], #可选. 全局单例对象, 可以存放加载的模型, 使用og.my_app调用
+    'custom_tabs': [  # 自定义页面，左侧导航的前两项：首页、任务设定
+        ["src.ui.home_tab", "HomeTab"],
+        ["src.ui.task_settings_tab", "TaskSettingsTab"],
+    ],
     'onetime_tasks': [  # 用户点击触发的任务
         ["src.tasks.MyOneTimeTask", "MyOneTimeTask"],
         ["ok", "DiagnosisTask"],

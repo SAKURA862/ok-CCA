@@ -17,6 +17,8 @@ data/
 ok_tasks/
 *$py.class
 configs/
+.tmp/
+cache/
 paddle_model/
 ok/
 *.dat
