@@ -63,6 +63,15 @@ def make_bottom_right_black(frame): #可选. 某些游戏截图时遮挡UID使�
 config = {
     'custom_tasks':True, # enable creating and editing custom tasks
     'debug': False,  # Optional, default: False
+    # 游戏适配器名字（在 src/games/registry.py 里注册）。空 = 不启用启动层。
+    'game_profile': '',
+    # 启动层参数，单位秒。boot_timeout: 拉起进程到出现登录页；enter_timeout: 点登录到进入游戏
+    'game_bootstrap': {
+        'boot_timeout': 180,
+        'enter_timeout': 90,
+        'poll_interval': 0.6,
+        'force_restart': False,  # True = 每次运行前重启游戏
+    },
     'gui': gui_config,
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],
