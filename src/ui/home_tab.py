@@ -58,9 +58,13 @@ class DailyRunThread(QThread):
         self._tasks = list(tasks)
 
     def run(self):
-        total = len(self._tasks)
+        launch_task = self._launch_task()
+        total = len(self._tasks) + (1 if launch_task else 0)
+        if launch_task and self._run_launch_step(launch_task, total):
+            return
+        offset = 1 if launch_task else 0
         for index, task in enumerate(self._tasks, 1):
-            self.progress.emit(task.name, index, total)
+            self.progress.emit(task.name, index + offset, total)
             done = threading.Event()
 
             def on_done(finished_task, _task=task, _done=done):
@@ -80,6 +84,38 @@ class DailyRunThread(QThread):
                 self.failed.emit(f'{task.name} 执行超时')
                 return
             daily_state.mark_done(task)
+
+    @staticmethod
+    def _launch_task():
+        """一键日常开始前，先跑隐藏的启动任务把游戏准备好。"""
+        return next(
+            (item for item in og.executor.onetime_tasks
+             if type(item).__name__ == 'CrossCoreDailyTask'),
+            None,
+        )
+
+    def _run_launch_step(self, task, total):
+        self.progress.emit('启动游戏', 1, total)
+        return not self._wait_task(task, timeout=900, label='启动游戏')
+
+    def _wait_task(self, task, timeout, label=None):
+        """启动一个任务并等它结束，返回是否正常完成。"""
+        name = label or task.name
+        done = threading.Event()
+
+        def on_done(finished_task):
+            if finished_task is task:
+                done.set()
+
+        communicate.task_done.connect(on_done)
+        try:
+            og.app.start_controller.start(task)
+            return done.wait(timeout=timeout)
+        except Exception as error:  # noqa: BLE001 - 直接反馈给界面
+            self.failed.emit(f'{name} 启动失败：{error}')
+            return False
+        finally:
+            communicate.task_done.disconnect(on_done)
 
 
 class TaskTile(RoundedCard):

@@ -128,6 +128,7 @@ config = {
         ["src.ui.task_settings_tab", "TaskSettingsTab"],
     ],
     'onetime_tasks': [  # 用户点击触发的任务
+        ["src.tasks.CrossCoreDaily", "CrossCoreDailyTask"],
         ["src.tasks.MyOneTimeTask", "MyOneTimeTask"],
         ["ok", "DiagnosisTask"],
     ],
