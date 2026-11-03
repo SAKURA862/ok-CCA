@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>交错战线 · 全局启动层设计（架构图 / 类图）</title>
+<style>
+  :root {
+    --bg: #faf7f8;
+    --panel: #ffffff;
+    --ink: #2f2a2e;
+    --muted: #7b7078;
+    --line: #e2d9df;
+    --accent: #efa1c0;
+    --accent-soft: #fff0f6;
+    --accent-ink: #a6466f;
+    --code: #f4eef1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 40px 56px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: .2px; }
+  h2 { font-size: 16px; margin: 34px 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 20px 8px;
+    box-shadow: 0 1px 2px rgba(80, 60, 70, .05);
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .box { fill: #fff; stroke: var(--line); stroke-width: 1.2; }
+  .box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+  .box-muted { fill: #fbf8fa; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  .tb { fill: var(--ink); font-size: 13px; font-weight: 600; }
+  .t { fill: var(--ink); font-size: 13px; }
+  .ts { fill: var(--muted); font-size: 11.5px; }
+  .tm { fill: var(--accent-ink); font-size: 11.5px; font-family: "Consolas", "Cascadia Mono", monospace; }
+  .band { fill: var(--muted); font-size: 11.5px; letter-spacing: .4px; }
+  .edge { stroke: #9b8f97; stroke-width: 1.3; fill: none; }
+  .edge-strong { stroke: var(--accent-ink); stroke-width: 1.6; fill: none; }
+  .edge-dash { stroke: #9b8f97; stroke-width: 1.3; fill: none; stroke-dasharray: 6 4; }
+  .lbl { fill: var(--muted); font-size: 11px; }
+  .lbl-strong { fill: var(--accent-ink); font-size: 11px; }
+  ul { margin: 8px 0 12px; padding-left: 20px; }
+  li { margin: 3px 0; }
+  code {
+    background: var(--code); border-radius: 5px; padding: 1px 5px;
+    font-family: "Consolas", "Cascadia Mono", monospace; font-size: 12.5px;
+  }
+  .legend { display: flex; gap: 22px; flex-wrap: wrap; margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
+  .legend i { display: inline-block; width: 26px; height: 0; border-top: 1.3px solid #9b8f97; vertical-align: middle; margin-right: 6px; }
+  .legend .dash { border-top-style: dashed; }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 8px; margin: 12px 0 4px; }
+  .note b { color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<h1>交错战线 · 全局启动层设计</h1>
+<p class="sub">目标：任何任务在执行前都先经过「启动游戏 / 处理登录页」；不改 ok-script 本体，只改项目自己的框架层（<code>MyBaseTask</code> 一处 + 新增模块）。</p>
+
+<h2>一、架构图</h2>
+<div class="legend">
+  <span><i></i>调用</span>
+  <span><i class="dash"></i>绕过 / 实现关系</span>
+  <span>粉色：本次新增或改动的项目框架层</span>
+</div>
+<div class="panel">
+<svg viewBox="0 0 1180 790" role="img" aria-label="全局启动层架构图">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9b8f97"/>
+    </marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a6466f"/>
+    </marker>
+  </defs>
+
+  <text class="band" x="28" y="32">入口层（用户可见）</text>
+  <text class="band" x="28" y="152">调度层（ok-script 提供）</text>
+  <text class="band" x="28" y="266">项目框架层（本次改动）</text>
+  <text class="band" x="28" y="372">启动编排层（新增）</text>
+  <text class="band" x="28" y="482">游戏适配层（新增）</text>
+  <text class="band" x="28" y="588">设备层（ok-script 提供，不改）</text>
+  <text class="band" x="28" y="686">目标</text>
+
+  <rect class="box" x="30" y="44" width="260" height="54" rx="10"/>
+  <text class="tb" x="48" y="68">GUI 首页「一键完成日常」</text>
+  <text class="ts" x="48" y="86">批量：启动步骤 + 勾选任务</text>
+
+  <rect class="box" x="310" y="44" width="260" height="54" rx="10"/>
+  <text class="tb" x="328" y="68">GUI 任务详情「运行一次」</text>
+  <text class="ts" x="328" y="86">单个任务（本次新增按钮）</text>
+
+  <rect class="box" x="590" y="44" width="260" height="54" rx="10"/>
+  <text class="tb" x="608" y="68">CLI  ok run_task</text>
+  <text class="ts" x="608" y="86">无界面，独立进程</text>
+
+  <rect class="box" x="870" y="44" width="270" height="54" rx="10"/>
+  <text class="tb" x="888" y="68">MCP  run_task(file_path)</text>
+  <text class="ts" x="888" y="86">Agent / 自动化验证入口</text>
+
+  <rect class="box" x="130" y="172" width="300" height="52" rx="10"/>
+  <text class="t" x="148" y="196">start_controller.start(task)</text>
+  <text class="ts" x="148" y="213">GUI 单任务 / 批量 / CLI 共用</text>
+
+  <rect class="box" x="470" y="172" width="280" height="52" rx="10"/>
+  <text class="t" x="488" y="196">TaskExecutor.execute()</text>
+  <text class="ts" x="488" y="213">取帧 → task.run()</text>
+
+  <rect class="box-muted" x="820" y="172" width="320" height="52" rx="10"/>
+  <text class="t" x="838" y="196">mcp_runner</text>
+  <text class="ts" x="838" y="213">不经过 start_controller</text>
+
+  <rect class="box-accent" x="140" y="286" width="900" height="70" rx="12"/>
+  <text class="tb" x="162" y="312">MyBaseTask.__init_subclass__ → 包装后的 run()</text>
+  <text class="tm" x="162" y="333">项目内所有任务统一经过的唯一位置（三条入口的交集）</text>
+  <text class="ts" x="162" y="349">SKIP_GAME_BOOTSTRAP = True 可让个别任务跳过</text>
+
+  <rect class="box-accent" x="140" y="392" width="900" height="74" rx="12"/>
+  <text class="tb" x="162" y="418">tasks/bootstrap.py · ensure_ready(task, adapter)</text>
+  <text class="ts" x="162" y="438">未在前台 → 启动；停在登录页 → 点击；已在大厅 → 直接放行；超时 → 抛错 + 截图</text>
+  <text class="tm" x="162" y="456">上限：boot_timeout 180s / enter_timeout 90s</text>
+
+  <rect class="box-accent" x="140" y="502" width="400" height="64" rx="12"/>
+  <text class="tb" x="162" y="528">games/base.py · GameAdapter（接口）</text>
+  <text class="ts" x="162" y="548">launch / is_foreground / is_login_screen / tap_login</text>
+
+  <rect class="box-accent" x="620" y="502" width="420" height="64" rx="12"/>
+  <text class="tb" x="642" y="528">games/crosscore.py · CrossCoreAdapter</text>
+  <text class="ts" x="642" y="548">颜色 + 几何识别，点击 (0.5, 0.668)</text>
+
+  <rect class="box" x="140" y="608" width="900" height="58" rx="10"/>
+  <text class="t" x="162" y="632">ok-script DeviceManager · ADBInteraction · 截图采集</text>
+  <text class="ts" x="162" y="651">adb shell input tap / next_frame()；PostMessage 因完整性级别限制未启用</text>
+
+  <rect class="box" x="140" y="706" width="420" height="54" rx="10"/>
+  <text class="tb" x="162" y="730">MuMu 模拟器 127.0.0.1:16416</text>
+  <text class="ts" x="162" y="747">2560×1440 横屏</text>
+
+  <rect class="box" x="620" y="706" width="420" height="54" rx="10"/>
+  <text class="tb" x="642" y="730">交错战线 com.megagame.crosscore</text>
+  <text class="ts" x="642" y="747">标题页「开始游戏」</text>
+
+  <path class="edge" d="M 170 98 C 170 130, 240 140, 258 172" marker-end="url(#a1)"/>
+  <path class="edge" d="M 430 98 C 420 132, 330 140, 312 172" marker-end="url(#a1)"/>
+  <path class="edge" d="M 700 98 C 640 132, 400 140, 372 172" marker-end="url(#a1)"/>
+  <path class="edge-dash" d="M 1005 98 C 1005 132, 992 146, 984 172" marker-end="url(#a1)"/>
+
+  <path class="edge" d="M 430 198 L 466 198" marker-end="url(#a1)"/>
+  <text class="lbl" x="440" y="190">派发</text>
+
+  <path class="edge-strong" d="M 610 224 L 602 286" marker-end="url(#a2)"/>
+  <text class="lbl-strong" x="616" y="262">run()</text>
+
+  <path class="edge-dash" d="M 975 224 C 975 250, 700 250, 700 286" marker-end="url(#a1)"/>
+  <text class="lbl" x="782" y="270">直接调用 run()</text>
+
+  <path class="edge-strong" d="M 590 356 L 590 392" marker-end="url(#a2)"/>
+
+  <path class="edge" d="M 470 466 C 440 488, 380 492, 352 502" marker-end="url(#a1)"/>
+  <text class="lbl" x="352" y="486">调用接口</text>
+
+  <path class="edge-dash" d="M 620 534 L 544 534" marker-end="url(#a1)"/>
+  <text class="lbl" x="556" y="526">实现</text>
+
+  <path class="edge" d="M 480 566 C 500 586, 530 596, 556 608" marker-end="url(#a1)"/>
+  <text class="lbl" x="452" y="596">采集 / 点击</text>
+
+  <path class="edge" d="M 590 666 L 590 706" marker-end="url(#a1)"/>
+  <path class="edge" d="M 560 733 L 618 733" marker-end="url(#a1)"/>
+  <text class="lbl" x="556" y="726">承载</text>
+</svg>
+</div>
+
+<ul>
+  <li><b>为什么钩子在 <code>run()</code>：</b>GUI、CLI 走 <code>start_controller → TaskExecutor → task.run()</code>；MCP 的 <code>mcp_runner</code> 绕开调度器，直接调用 <code>task.run()</code>。三条路径唯一的交集就是 <code>run()</code>。</li>
+  <li><b>入口差异只影响“什么时候进入 run”：</b>批量、单跑、CLI、MCP 最终命中同一个包装层，启动逻辑只写一份。</li>
+  <li><b>不动 ok-script 本体：</b>设备层、调度器、截图与点击 API 全部保持原样，只在项目基类里包一层。</li>
+</ul>
+
+<h2>二、类图</h2>
+<div class="legend">
+  <span><i></i>依赖（调用）</span>
+  <span><i class="dash"></i>实现 / 弱依赖</span>
+  <span>△ 空心三角：继承</span>
+</div>
+<div class="panel">
+<svg viewBox="0 0 1180 690" role="img" aria-label="全局启动层类图">
+  <defs>
+    <marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="11" markerHeight="11" orient="auto-start-reverse">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#ffffff" stroke="#9b8f97" stroke-width="1.2"/>
+    </marker>
+    <marker id="dep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9b8f97"/>
+    </marker>
+  </defs>
+
+  <!-- BaseTask -->
+  <rect class="box" x="40" y="60" width="280" height="128" rx="10"/>
+  <text class="tb" x="60" y="86">BaseTask</text>
+  <text class="ts" x="60" y="104">ok-script 提供，不改</text>
+  <line x1="40" y1="112" x2="320" y2="112" stroke="#e2d9df"/>
+  <text class="tm" x="60" y="132">+ run()</text>
+  <text class="tm" x="60" y="152">+ reset_to_start()</text>
+  <text class="tm" x="60" y="172">+ verify_start_state()</text>
+
+  <!-- MyBaseTask -->
+  <rect class="box-accent" x="430" y="44" width="330" height="160" rx="10"/>
+  <text class="tb" x="450" y="70">MyBaseTask</text>
+  <text class="ts" x="450" y="88">项目框架层 · 本次唯一改动点</text>
+  <line x1="430" y1="96" x2="760" y2="96" stroke="#efa1c0"/>
+  <text class="tm" x="450" y="116">+ SKIP_GAME_BOOTSTRAP: bool</text>
+  <text class="tm" x="450" y="136">+ ensure_game_ready()</text>
+  <text class="tm" x="450" y="156">+ __init_subclass__()</text>
+  <text class="ts" x="450" y="180">把子类 run() 包成 run → bootstrap → 业务代码</text>
+
+  <!-- subclass -->
+  <rect class="box" x="870" y="60" width="270" height="128" rx="10"/>
+  <text class="tb" x="890" y="86">XxxTask（业务任务）</text>
+  <text class="ts" x="890" y="104">继承即自动获得启动步骤</text>
+  <line x1="870" y1="112" x2="1140" y2="112" stroke="#e2d9df"/>
+  <text class="tm" x="890" y="132">+ run()  ← 业务代码</text>
+  <text class="tm" x="890" y="152">+ default_config</text>
+  <text class="tm" x="890" y="172">+ reset_to_start()</text>
+
+  <!-- GameAdapter -->
+  <rect class="box-accent" x="40" y="300" width="280" height="150" rx="10"/>
+  <text class="tb" x="60" y="326">«interface» GameAdapter</text>
+  <text class="ts" x="60" y="344">games/base.py</text>
+  <line x1="40" y1="352" x2="320" y2="352" stroke="#efa1c0"/>
+  <text class="tm" x="60" y="372">+ package_name: str</text>
+  <text class="tm" x="60" y="392">+ launch()</text>
+  <text class="tm" x="60" y="412">+ is_foreground()</text>
+  <text class="tm" x="60" y="432">+ is_login_screen(frame)</text>
+
+  <!-- CrossCoreAdapter -->
+  <rect class="box-accent" x="430" y="288" width="330" height="164" rx="10"/>
+  <text class="tb" x="450" y="314">CrossCoreAdapter</text>
+  <text class="ts" x="450" y="332">games/crosscore.py</text>
+  <line x1="430" y1="340" x2="760" y2="340" stroke="#efa1c0"/>
+  <text class="tm" x="450" y="360">+ TITLE_ROI / 阈值常量</text>
+  <text class="tm" x="450" y="380">+ is_login_screen(frame)</text>
+  <text class="tm" x="450" y="400">+ tap_login(task)</text>
+  <text class="tm" x="450" y="420">+ launch() / is_foreground()</text>
+  <text class="ts" x="450" y="440">颜色 + 几何判据，无需 OCR</text>
+
+  <!-- BootstrapRunner -->
+  <rect class="box-accent" x="870" y="276" width="270" height="176" rx="10"/>
+  <text class="tb" x="890" y="302">BootstrapRunner</text>
+  <text class="ts" x="890" y="320">tasks/bootstrap.py</text>
+  <line x1="870" y1="328" x2="1140" y2="328" stroke="#efa1c0"/>
+  <text class="tm" x="890" y="348">+ ensure_ready(task, adapter)</text>
+  <text class="tm" x="890" y="368">+ boot_timeout: float</text>
+  <text class="tm" x="890" y="388">+ enter_timeout: float</text>
+  <text class="tm" x="890" y="408">+ force_restart: bool</text>
+  <text class="ts" x="890" y="430">状态机 + 日志 + 失败截图</text>
+
+  <!-- BootstrapResult -->
+  <rect class="box" x="870" y="490" width="270" height="130" rx="10"/>
+  <text class="tb" x="890" y="516">«enum» BootstrapResult</text>
+  <text class="ts" x="890" y="534">tasks/bootstrap.py</text>
+  <line x1="870" y1="542" x2="1140" y2="542" stroke="#e2d9df"/>
+  <text class="tm" x="890" y="562">+ LAUNCHED</text>
+  <text class="tm" x="890" y="582">+ TAPPED</text>
+  <text class="tm" x="890" y="602">+ ALREADY_READY / ERROR</text>
+
+  <!-- AppConfig -->
+  <rect class="box" x="430" y="490" width="330" height="130" rx="10"/>
+  <text class="tb" x="450" y="516">AppConfig（src/config.py）</text>
+  <text class="ts" x="450" y="534">配置来源</text>
+  <line x1="430" y1="542" x2="760" y2="542" stroke="#e2d9df"/>
+  <text class="tm" x="450" y="562">+ game_profile: str</text>
+  <text class="tm" x="450" y="582">+ bootstrap.boot_timeout</text>
+  <text class="tm" x="450" y="602">+ bootstrap.force_restart</text>
+
+  <!-- inheritance -->
+  <path class="edge" d="M 430 124 L 326 124" marker-end="url(#tri)"/>
+  <text class="lbl" x="352" y="116">继承</text>
+
+  <path class="edge" d="M 870 124 L 766 124" marker-end="url(#tri)"/>
+  <text class="lbl" x="792" y="116">继承</text>
+
+  <!-- realization: CrossCore implements GameAdapter -->
+  <path class="edge-dash" d="M 430 350 L 326 350" marker-end="url(#tri)"/>
+  <text class="lbl" x="340" y="342">实现</text>
+
+  <!-- MyBaseTask -> BootstrapRunner -->
+  <path class="edge" d="M 700 204 L 700 236 L 940 236 L 940 272" marker-end="url(#dep)"/>
+  <text class="lbl" x="706" y="230">调用 ensure_ready</text>
+
+  <!-- BootstrapRunner -> GameAdapter -->
+  <path class="edge-dash" d="M 940 452 L 940 478 L 180 478 L 180 454" marker-end="url(#dep)"/>
+  <text class="lbl" x="470" y="472">依赖 GameAdapter 接口</text>
+
+  <!-- BootstrapResult -> BootstrapRunner -->
+  <path class="edge-dash" d="M 1050 490 L 1050 456" marker-end="url(#dep)"/>
+
+  <!-- AppConfig -> BootstrapRunner -->
+  <path class="edge-dash" d="M 760 524 L 830 524 L 830 404 L 866 404" marker-end="url(#dep)"/>
+
+  <text class="ts" x="40" y="662">注：reset_to_start 由「强杀 + 回桌面」改为「轻校验 + 可选 Force Restart」，默认不打断已运行的游戏。</text>
+</svg>
+</div>
+
+<ul>
+  <li><code>MyBaseTask.__init_subclass__</code> 用 <code>functools.wraps</code> 包装子类 <code>run</code>，函数名、签名、同步属性保持不变，MCP 运行器的校验（非 <code>BaseTask.run</code>、非 async/generator）依然通过。</li>
+  <li><code>BootstrapRunner</code> 只依赖 <code>GameAdapter</code> 接口；加第二个游戏时新增一个适配器并在 <code>config.game_profile</code> 里切换，启动编排代码不用动。</li>
+  <li>任务自身的 <code>reset_to_start</code> / <code>verify_start_state</code> 保留，但语义变为「确认可执行」，不再清场；MCP 的 <code>reset → verify → run</code> 流程因此不会关掉正在运行的游戏。</li>
+</ul>
+
+<div class="note">
+  <b>三个必然结论：</b>
+  1. 启动步骤只写一次，位置在项目基类，不漏任何入口；
+  2. ok-script 包零改动，升级安全；
+  3. 是否启动 / 是否点击由运行时状态决定（前台包名 + 登录页特征），不做「每次重启」的粗暴处理。
+</div>
+
+</body>
+</html>
