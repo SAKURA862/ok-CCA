@@ -1,0 +1,48 @@
+{
+  "_comment": "弹窗规则示例。把 enabled 改成 true 并导出对应模板后，用 config['overlays']['rules_file'] 指向本文件即可生效。",
+  "rules": [
+    {
+      "id": "network_retry",
+      "when": "anytime",
+      "template": "overlay_network_retry",
+      "threshold": 0.85,
+      "action": {"type": "click_box"},
+      "cooldown": 2.0,
+      "max_attempts": 3,
+      "enabled": false
+    },
+    {
+      "id": "reconnect",
+      "when": "anytime",
+      "template": "overlay_reconnect",
+      "threshold": 0.85,
+      "action": {"type": "click_box"},
+      "cooldown": 5.0,
+      "max_attempts": 3,
+      "enabled": false
+    },
+    {
+      "id": "daily_notice",
+      "when": "after_login",
+      "template": "overlay_daily_notice",
+      "roi": [0.2, 0.1, 0.8, 0.4],
+      "threshold": 0.85,
+      "action": {"type": "click", "x": 0.86, "y": 0.18},
+      "cooldown": 2.0,
+      "max_attempts": 3,
+      "daily": true,
+      "enabled": false
+    },
+    {
+      "id": "daily_signin",
+      "when": "on_home",
+      "template": "overlay_daily_signin",
+      "threshold": 0.85,
+      "action": {"type": "key", "key": "ESC"},
+      "cooldown": 3.0,
+      "max_attempts": 2,
+      "daily": true,
+      "enabled": false
+    }
+  ]
+}

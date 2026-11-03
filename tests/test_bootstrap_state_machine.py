@@ -115,14 +115,17 @@ def case_already_ready():
 def case_launch_then_tap():
     adapter = FakeAdapter(ready=False, login=False)
     restore = _patch(adapter)
+    after_login = []
     try:
         task = FakeTask({'game_profile': 'fake'})
+        task.run_overlays = lambda when: after_login.append(when)
         result = bootstrap.ensure_ready(task)
     finally:
         bootstrap.create = restore
     assert result is game_base.BootstrapResult.LAUNCHED, result
     assert adapter.launched == 1, f'launch 次数应为 1，实际 {adapter.launched}'
     assert adapter.tapped == 1, f'tap 次数应为 1，实际 {adapter.tapped}'
+    assert after_login == ['after_login'], f'登录后应触发一次弹窗层，实际 {after_login}'
 
 
 def case_already_running_at_login():

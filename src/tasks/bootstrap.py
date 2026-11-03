@@ -63,6 +63,13 @@ def _wait_ready(task, adapter, timeout):
     raise BootstrapError(f'点击登录后 {timeout:.0f}s 内没有进入游戏可执行画面')
 
 
+def _after_login(task):
+    """登录完成后的时机：交给弹窗层处理公告 / 签到这类每日窗口。"""
+    runner = getattr(task, 'run_overlays', None)
+    if callable(runner):
+        runner('after_login')
+
+
 def ensure_ready(task) -> BootstrapResult:
     """把游戏带到可执行状态，返回本次做了什么。
 
@@ -93,6 +100,7 @@ def ensure_ready(task) -> BootstrapResult:
                 _capture(task, 'bootstrap_tap_failed')
                 raise BootstrapError('登录页存在但点击没有发出')
             _wait_ready(task, adapter, cfg.enter_timeout)
+            _after_login(task)
             result = BootstrapResult.LAUNCHED if launched else BootstrapResult.TAPPED
             _info(task, f'bootstrap: 已进入游戏，结果={result.value}')
             return result

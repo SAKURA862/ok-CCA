@@ -72,6 +72,11 @@ config = {
         'poll_interval': 0.6,
         'force_restart': False,  # True = 每次运行前重启游戏
     },
+    # 弹窗层：随时弹出的窗口（网络错误、公告、签到）在这里统一处理
+    'overlays': {
+        'rules_file': '',  # 留空 = 没有规则；填 JSON 路径即可追加规则
+        'min_interval': 0.3,  # 取帧路径上两次检查的最小间隔（秒）
+    },
     'gui': gui_config,
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],
