@@ -140,6 +140,7 @@ config = {
     'custom_tabs': [  # 自定义页面，左侧导航的前两项：首页、任务设定
         ["src.ui.home_tab", "HomeTab"],
         ["src.ui.task_settings_tab", "TaskSettingsTab"],
+        ["src.ui.log_page", "LogTab"],
     ],
     'onetime_tasks': [  # 用户点击触发的任务
         ["src.tasks.MyOneTimeTask", "MyOneTimeTask"],

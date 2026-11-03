@@ -19,3 +19,11 @@ class Globals(QObject):
         theme.attach(window)
         # 隐藏暂不支持的语言项与「任务 / 模板」导航
         shell_patch.apply(window)
+        # 日志总线与底边栏日志：只在 GUI 里装，CLI/MCP 不受影响
+        try:
+            from src.ui import log_bus, log_dock
+
+            log_bus.bus.install()
+            log_dock.install(window)
+        except Exception as error:  # noqa: BLE001 - 日志界面失败不能影响主流程
+            logger.exception(f'install log ui failed: {error}')
