@@ -1,23 +1,32 @@
-"""项目任务基类：统一挂载「启动层」。
-
-所有任务都继承它，于是无论从 GUI（一键日常 / 详情页单跑）、CLI 还是 MCP
-执行，``run()`` 之前都会先过一次 :func:`src.tasks.bootstrap.ensure_ready`。
-
-需要跳过的任务设置 ``SKIP_GAME_BOOTSTRAP = True``；需要指定游戏的任务设置
-``game_profile = 'crosscore'``，否则使用 ``config['game_profile']``。
-"""
+"""项目任务基类：在 ``run()`` 前挂启动层，并提供弹窗层与导航层入口。"""
 
 import functools
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 from ok import BaseTask
 
+from src.nav.actions import ActionExecutor
+from src.nav.locator import Locator
+from src.nav.model import NavError
+from src.nav.navigator import NavCache, Navigator
+from src.nav import registry as nav_registry
 from src.runtime import daily, overlay
 from src.tasks import bootstrap
 
 
 class MyBaseTask(BaseTask):
-    """项目内所有任务的基类。"""
+    """项目内所有任务的基类。
+
+    Attributes:
+      game_profile: 启动层使用的游戏配置名，空表示不接管启动。
+      SKIP_GAME_BOOTSTRAP: 为 True 时跳过启动层。
+      STUCK_AFTER: 业务多久无进展后尝试 on_stuck 弹窗规则（秒）。
+      entry_page: 任务入口页，批量调度时先导航到这里。
+      home_page: 任务结束后建议回到的页面。
+      nav_profile: 导航图配置名，空表示跟随 ``game_profile``。
+    """
 
     # 空字符串 = 不接管启动层，等价于旧行为
     game_profile = ''
@@ -25,6 +34,12 @@ class MyBaseTask(BaseTask):
     SKIP_GAME_BOOTSTRAP = False
     # 业务多久没有进展就尝试一次 on_stuck 兜底规则（秒）
     STUCK_AFTER = overlay.DEFAULT_STUCK_AFTER
+    # 任务入口页：批量调度时先 goto 到这里，空表示从当前页开始
+    entry_page = ''
+    # 任务结束后建议回到的页面，空表示不处理
+    home_page = ''
+    # 导航图 profile，空表示跟随 game_profile
+    nav_profile = ''
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -33,13 +48,14 @@ class MyBaseTask(BaseTask):
         self._daily_state = None
         self._last_progress = time.monotonic()
         self._last_stuck_check = 0.0
+        self._locator = None
+        self._navigator = None
 
     def __init_subclass__(cls, **kwargs):
-        """把子类自己定义的 ``run`` 包一层，前面插入启动层。
+        """包装子类自定义的 ``run``，在真正执行前插入启动层。
 
-        只包装子类 ``__dict__`` 里的 ``run``：继承来的实现已经被包装过，
-        没有再包一次的问题；没有定义 ``run`` 的子类保持原样，让 MCP 的
-        ``cls.run is BaseTask.run`` 校验照常报错。
+        只处理子类 ``__dict__`` 里的 ``run``：继承来的实现已经包过，
+        没定义 ``run`` 的子类保持原样，让 MCP 的校验照常报错。
         """
         super().__init_subclass__(**kwargs)
         original = cls.__dict__.get('run')
@@ -55,7 +71,7 @@ class MyBaseTask(BaseTask):
         cls.run = run
 
     def ensure_game_ready(self):
-        """幂等：同一次 run 里重复调用只执行一次。"""
+        """确保游戏就绪；同一次 run 内只执行一次。"""
         if self._bootstrap_done or self.SKIP_GAME_BOOTSTRAP:
             return None
         self._bootstrap_done = True
@@ -121,3 +137,121 @@ class MyBaseTask(BaseTask):
         self._last_stuck_check = now
         if self.run_overlays('on_stuck', frame=frame) is not None:
             self.report_progress()
+
+    # ------------------------------------------------------------------ 导航层
+    @property
+    def nav_settings(self) -> dict:
+        """``config['nav']`` 段，缺省为空字典。"""
+        config = getattr(self.executor, 'config', None) or {}
+        return config.get('nav') or {}
+
+    @property
+    def nav_graph(self):
+        """当前任务的页面图。
+
+        Raises:
+          NavError: 既没有 ``nav_profile`` 也没有 ``game_profile``。
+        """
+        profile = self.nav_profile or self.game_profile
+        if not profile:
+            raise NavError('未配置 game_profile/nav_profile，无法加载导航图')
+        return nav_registry.get(profile, self.nav_settings.get('graph_file') or None)
+
+    @property
+    def locator(self) -> Locator:
+        """页面定位器。"""
+        if self._locator is None:
+            self._locator = Locator(self.nav_graph, self._find_anchor, warn=self.log_warning)
+        return self._locator
+
+    @property
+    def navigator(self) -> Navigator:
+        """导航执行器。"""
+        if self._navigator is None:
+            config = getattr(self.executor, 'config', None) or {}
+            folder = Path(config.get('config_folder') or 'configs')
+            cache_file = self.nav_settings.get('cache_file') or folder / 'nav_cache.json'
+            self._navigator = Navigator(
+                self.nav_graph,
+                locate=self._locate_current,
+                wait_page=self._wait_page,
+                actions=ActionExecutor(
+                    click_template=self._click_nav_template,
+                    click_point=lambda x, y: self.click_relative(x, y),
+                    press_key=lambda key: self.send_key(key),
+                ),
+                cache=NavCache.load(cache_file),
+                screenshot=lambda name: self.screenshot(name),
+                warn=self.log_warning,
+                max_hops=int(self.nav_settings.get('max_hops', 6)),
+            )
+        return self._navigator
+
+    def current_page(self) -> str:
+        """识别并返回当前页面 id。"""
+        return self.navigator.locate()
+
+    def goto(self, page: str):
+        """导航到指定页面。
+
+        Args:
+          page: 目标页面 id。
+
+        Returns:
+          实际走过的 ``Path``。
+        """
+        return self.navigator.goto(page)
+
+    def ensure_page(self, page: str):
+        """确保位于指定页面；已在目标页时不移动。"""
+        return self.navigator.ensure(page)
+
+    def nav_back(self) -> str | None:
+        """返回上一个停留过的页面。
+
+        与设备返回键 ``back()`` 区分：这里按导航历史回退，不直接按键。
+        """
+        return self.navigator.back()
+
+    @contextmanager
+    def on_page(self, page: str):
+        """进入指定页面后执行一段逻辑。
+
+        Args:
+          page: 入口页面 id。
+
+        Yields:
+          任务自身。
+        """
+        self.ensure_page(page)
+        yield self
+
+    def _find_anchor(self, template: str):
+        """用配置的阈值匹配一个锚点模板。"""
+        threshold = float(self.nav_settings.get('threshold', 0.8))
+        return self.find_one(template, threshold=threshold)
+
+    def _locate_current(self):
+        """带 last_page 提示的定位。"""
+        last = self._navigator.last_page if self._navigator else None
+        return self.locator.locate(last)
+
+    def _wait_page(self, page_id: str, timeout: float) -> bool:
+        """等待目标页锚点出现。"""
+        settle = float(self.nav_settings.get('settle_time', 0.3))
+        return bool(self.wait_until(lambda: self.locator.is_page(page_id),
+                                    time_out=timeout, settle_time=settle))
+
+    def _click_nav_template(self, template: str, roi) -> bool:
+        """点击模板；未匹配到时返回 False。"""
+        box_arg = None
+        if roi:
+            box_of_screen = getattr(self, 'box_of_screen', None)
+            if callable(box_of_screen):
+                box_arg = box_of_screen(*roi)
+        box = self.find_one(template, box=box_arg,
+                            threshold=float(self.nav_settings.get('threshold', 0.8)))
+        if box is None:
+            return False
+        self.click(box)
+        return True

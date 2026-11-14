@@ -77,6 +77,14 @@ config = {
         'rules_file': '',  # 留空 = 没有规则；填 JSON 路径即可追加规则
         'min_interval': 0.3,  # 取帧路径上两次检查的最小间隔（秒）
     },
+    # 导航层：页面图、定位阈值与边统计缓存
+    'nav': {
+        'graph_file': '',  # 留空 = assets/nav/<game_profile>.json
+        'cache_file': '',  # 留空 = <config_folder>/nav_cache.json
+        'threshold': 0.8,  # 页面锚点匹配阈值
+        'settle_time': 0.3,  # 判定「已到达」所需的稳定时间（秒）
+        'max_hops': 6,  # 单次寻路的最大跳数
+    },
     'gui': gui_config,
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],
