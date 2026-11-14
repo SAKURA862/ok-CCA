@@ -141,9 +141,112 @@ class ArenaTask(MyBaseTask):
 
 `graph_file` / `cache_file` 留空时分别落到 `assets/nav/<profile>.json` 与 `<config_folder>/nav_cache.json`。`settle_time` 用于等待目标锚点稳定，避免点击动画造成的假命中。
 
+## 编排层
+
+两种驱动器共用一个 `Step` 原语：简单任务用 `Flow` 顺序执行，复杂任务用 `StateMachine` 按守卫转移。任务只需要实现 `build_flow()`，默认 `run()` 会执行它。
+
+### Step 字段
+
+| 字段 | 说明 |
+| --- | --- |
+| `name` | 步骤名，用于日志与失败截图 |
+| `goto` | 执行前先 `ensure_page` 到该页；只写 `goto` 就是纯导航步骤 |
+| `action` | 输入动作对象，如 `Tap(template='x')`，见「动作层」 |
+| `click` | 语法糖，等价于 `Tap(template=...)` |
+| `click_point` | 语法糖，等价于 `Tap(point=...)`，可写 `lambda task: (x, y)` |
+| `key` | 语法糖，等价于 `KeyPress(...)` |
+| `call` | 自定义函数（可传任务方法），返回值写入 `task.data[name]` |
+| `wait` | 动作后必须出现的模板名（默认等 8s，`settle_time=0.3`） |
+| `expect` | 额外断言 `lambda task: bool` |
+| `retry` | 失败重试次数，默认 1 |
+| `on_fail` | `retry` / `skip` / `abort`，默认 `abort` |
+| `optional` | 为真时失败只记警告并继续 |
+
+`action` 与 `call` 互斥，语法糖字段与 `action` 互斥且三个糖只能用一个；三样都没给时必须给 `goto`。失败重试用尽后截图 `flow_fail_<任务>_<步骤>`。
+
+### 动作层
+
+`action` 只负责「产生一次外部输入」，不读数据、不决定流程；读数据用 `call`，导航用 `goto`，等待与断言用 `wait` / `expect`。
+
+所有动作都支持三种目标，**只能给一个**：
+
+| 写法 | 含义 |
+| --- | --- |
+| `template='arena_deploy_button'` | 模板匹配，按 `relative` 取框内点（默认中心） |
+| `point=(0.87, 0.90)` | 归一化坐标；两分量都 ≤1 时按归一化处理，否则当像素 |
+| `box=(120, 200, 300, 260)` | 业务函数算出的像素框 |
+
+| 动作 | 关键参数 | 底层 |
+| --- | --- | --- |
+| `Tap` | — | `click` |
+| `DoubleTap` | `interval=0.12` | 两次 `click` |
+| `LongPress` | `hold=1.0` | `input motionevent DOWN/UP` |
+| `RightTap` | — | `click(key='right')` |
+| `Swipe` | `start` / `end` / `duration=0.5` | `swipe`，保留惯性 |
+| `Drag` | `start` / `end` / `duration=0.6` / `hold=0.2` | 分段 `motionevent`，抬起前停住 |
+| `KeyPress` | `key` / `hold=0.02`，`hold>0.15` 走长按 | `send_key` / `send_key_down`+`send_key_up` |
+| `KeyCombo` | `keys` / `hold=0.05` | 依次按下、逆序抬起 |
+| `TextInput` | `text` + 可选目标 / `settle=0.4` | 先点击目标再 `input_text` |
+
+```python
+Flow([
+    Step('长按卡片', action=LongPress(template='arena_card', hold=1.2)),
+    Step('下滑列表', action=Swipe(start='arena_list_top', end=(0.5, 0.25), duration=0.6)),
+    Step('精确拖到起点', action=Drag(start=(0.5, 0.8), end=(0.5, 0.3), hold=0.2)),
+    Step('搜索', action=TextInput('sword', template='search_box')),
+    Step('关掉面板', action=KeyPress('escape')),
+])
+```
+
+`Swipe` / `Drag` 的 `start`、`end` 是「目标简写」：字符串当模板名、二元组当坐标、四元组当框、函数运行时求值。`TextInput` 不给目标时直接输入（适合已经点过输入框的场景），只支持 ASCII，空格自动转 `%s`。
+
+### 线性：Flow
+
+```python
+class DailySignInTask(MyBaseTask):
+    entry_page = 'home'
+
+    def build_flow(self):
+        return Flow([
+            Step('打开签到', click='nav_home_signin', wait='signin_title'),
+            Step('领取', click='signin_claim', wait='signin_claimed', optional=True),
+            Step('关闭', click='signin_close', wait='home_marker'),
+        ])
+```
+
+### 状态机：StateMachine
+
+```python
+class ArenaTask(MyBaseTask):
+    entry_page = 'arena'
+
+    def build_flow(self):
+        return StateMachine({
+            'refresh': State('refresh', do=self.read_left,
+                             transitions=[(lambda t: t.data['left'] <= 0, 'done'),
+                                          (lambda t: True, 'pick')]),
+            'pick': State('pick', do=self.choose_opponent,
+                          transitions=[(lambda t: True, 'fight')]),
+            'fight': State('fight', do=[Step('挑战', click='arena_challenge')],
+                           transitions=[(lambda t: True, 'refresh')]),
+            'done': State('done', do=self.log_summary),
+        }, max_transitions=50)
+```
+
+`State.do` 可以是函数、单个 `Step` 或 `Step` 列表；`goto` 在进入状态前执行；`transitions` 按顺序取第一个为真的守卫，都不命中即结束。转移次数超过 `max_transitions` 抛 `FlowFailed`；同一状态原地打转会记一条 `flow: 没有进展` 警告。
+
+### 与其它层的关系
+
+- 每步执行前自动 `ensure_page`，导航层负责「在哪」，编排层负责「做什么」；
+- 每步结束调用 `report_progress()`，弹窗层的 8s 卡住判定不会误报；
+- 每步记一条 `flow: <步骤> (120ms)` 日志，日志页可见。
+
 ## 已知限制
 
 - 导航只支持模板匹配，不做 OCR 页面识别。
 - 图需要手工标注：每页 1 张锚点、每条边 1 张按钮模板。
+- `Drag` / `LongPress` 依赖 `input motionevent`（Android 11+），不支持时自动退回 `swipe` / `mouse_down`。
+- `RightTap` 只对支持右键的交互方式（PostMessage、pynput 等）有效，ADB 会当普通点击。
+- `TextInput` 只支持 ASCII；中文需要剪贴板或输入法方案。
 - 弹窗规则只订阅 `logging.getLogger("ok")`；项目外的日志不会进入日志页。
 - 底边栏日志的「暂停」只作用于页面视图，面板继续刷新。

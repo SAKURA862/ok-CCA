@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ok import BaseTask
 
+from src.flow.flow import DEFAULT_WAIT_TIMEOUT
+from src.flow.steps import FlowError
 from src.nav.actions import ActionExecutor
 from src.nav.locator import Locator
 from src.nav.model import NavError
@@ -50,6 +52,8 @@ class MyBaseTask(BaseTask):
         self._last_stuck_check = 0.0
         self._locator = None
         self._navigator = None
+        # 步骤/状态机之间共享的数据，``Step(call=...)`` 的结果也放这里
+        self.data = {}
 
     def __init_subclass__(cls, **kwargs):
         """包装子类自定义的 ``run``，在真正执行前插入启动层。
@@ -255,3 +259,46 @@ class MyBaseTask(BaseTask):
             return False
         self.click(box)
         return True
+
+    # ------------------------------------------------------------------ 编排层
+    def build_flow(self):
+        """返回本任务的编排流程。
+
+        Returns:
+          ``Flow`` 或 ``StateMachine``；返回 None 表示任务自己实现 ``run()``。
+        """
+        return None
+
+    def run(self):
+        """默认实现：执行 ``build_flow()`` 返回的流程。
+
+        Raises:
+          FlowError: 子类既没有实现 ``run()``，也没有实现 ``build_flow()``。
+        """
+        self.ensure_game_ready()
+        flow = self.build_flow()
+        if flow is None:
+            raise FlowError('任务需要实现 run() 或 build_flow()')
+        flow.run(self)
+
+    def click_template(self, template: str) -> bool:
+        """点击模板，未匹配到时返回 False。"""
+        return self._click_nav_template(template, None)
+
+    def wait_template(self, template: str, timeout: float = DEFAULT_WAIT_TIMEOUT) -> bool:
+        """等待模板出现。
+
+        Args:
+          template: 模板名。
+          timeout: 超时时间（秒）。
+
+        Returns:
+          True 表示在超时前匹配到。
+        """
+        threshold = float(self.nav_settings.get('threshold', 0.8))
+        settle = float(self.nav_settings.get('settle_time', 0.3))
+        return bool(self.wait_until(
+            lambda: self.find_one(template, threshold=threshold) is not None,
+            time_out=timeout,
+            settle_time=settle,
+        ))
