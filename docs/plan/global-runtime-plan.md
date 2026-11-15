@@ -52,8 +52,10 @@ dev           aabb9f1  ← base_frame + 交错战线启动任务
 | P1 | A 启动层 ✅ | M | `src/games/`、`src/tasks/bootstrap.py`、`MyBaseTask` 包装 |
 | P2 | B 弹窗层 ✅ | M | `src/runtime/overlay.py`、`src/runtime/daily.py`、`assets/overlays.example.json` |
 | P3 | C 导航层（页面图 + 寻路） | L | `src/nav/`、`assets/nav/<profile>.json`、`configs/nav_cache.json` |
-| P3.5 | 编排层（Flow / Step） | M | `src/flow/steps.py`、`MyBaseTask.build_flow()` |
-| P3.6 | 战斗运行时（框架通用） | M | `src/runtime/battle.py`、`BattleAdapter` |
+| P3.5 | 编排层（Flow / Step）✅ | M | `src/flow/steps.py`、`MyBaseTask.build_flow()` |
+| P3.6 | 任务调用任务（helper task） | S | `src/runtime/callable.py`、`src/runtime/helpers.py`、`MyBaseTask.call_task()` |
+| P3.7 | 战斗 / 扫荡 / 战利品（任务形式） | M | `BattleTask`、`SweepTask`、`LootTask` |
+| P3.8 | 战利品策略（上锁） | S | `LootPolicy`、`LockGoodChips` |
 | P4 | 详情页「运行一次」+ 批量联动 | S | `src/ui/task_settings_tab.py`、`src/ui/home_tab.py` |
 | P5 | 交错战线落地（dev） | M | `src/games/crosscore.py`、删除旧启动任务 |
 | P6 | 文档与收尾 | S | `docs/crosscore.md`、`docs/framework.md`、截图 |
@@ -246,30 +248,57 @@ tests/test_flow.py       合成 flow 单测（无设备）
 
 验收：合成 flow 覆盖 顺序/分支/重试/optional/循环上限 五类；真实任务在 P5 落地时跑通（镜像竞技）。
 
-### P3.6 · 战斗运行时（框架通用）
+### P3.6 · 任务调用任务（helper task）
 
-目标：战斗与结算是所有游戏共有的，任务只做「操作 → 进战 → 拿结果 → 自己决策」。
+目标：不引入战斗专用模块。框架只提供「任务之间同步调用」的能力，战斗、扫荡、战利品都由普通任务实现并组合。
+
+背景：ok 只调用无参 `task.run()` 且忽略返回值；`BaseTask.run_task_by_class()` 已具备「同步 + 共享 info + 异常回传」，但要求被调任务注册在 `onetime_tasks`/`trigger_tasks`，会出现在 GUI 里。
 
 交付：
 
 ```
-src/runtime/battle.py    BattleRuntime / BattleResult / BattleAdapter 协议
-src/games/crosscore.py   交错战线实现（P5）
-tests/test_battle.py     假适配器 + 构造帧序列的离线测试
+src/runtime/callable.py   CallableTask 基类、callable_task 装饰器、TaskCallError
+src/runtime/helpers.py    helper 注册表（不进 GUI 枚举）
+src/tasks/MyBaseTask.py   call_task()、call_args/result、重入保护、check_stop()
+tests/test_call_task.py   7 例离线测试
 ```
 
-`BattleAdapter` 协议：`is_battle(frame)`、`hud_anchor`、`ensure_settings(task)`（自动战斗/最高倍速）、`outcome(frame)` → `WIN|LOSE|None`、`settle_anchor`、`dismiss_settle(task)`、可选 `rewards(frame)`。
+契约：
 
-调用形态（阻塞 + 返回值）：
+- `helper_tasks`（`src/config.py`）里声明的任务只实例化、不加入 `onetime_tasks`/`trigger_tasks`，因此 GUI、MCP `list_tasks` 完全看不到；
+- 开发者继承 `CallableTask`，只写 `execute(...)`（带参、有返回值），`run()` 由基类适配：绑定参数、缺参报错、调 `execute`、把返回值存入 `self.result`；
+- 调用方用 `self.call_task(BattleTask, origin='arena')`，返回 `execute` 的返回值；`Step(call=...)` 会自动写进 `task.data[步骤名]`；
+- `call_task` 负责重入保护（深度上限 3）、跳过内层启动层、共享导航 `last_page`、异常包裹成 `TaskCallError('<外层> -> <内层>: ...')` 并截图；
+- GUI 单独点开 helper：必填参数缺失时由基类抛出「需要参数：origin」的明确错误。
 
-```python
-result = self.battle.fight(origin="arena", timeout=180)
-# BattleResult(outcome=WIN|LOSE|UNKNOWN, rewards=[...], duration=37.2)
-```
+验收：7 例离线测试全绿；在真机上用一个 helper 任务被主页任务调用一次（P5 阶段随交错战线验证）。
 
-内部六步：2s 内确认已进战（否则抛 `BattleNotStarted`）→ 补自动/最高速（幂等）→ 轮询胜负（`wait_until(..., settle_time=0)`，期间 `next_frame` 走弹窗层）→ 关结算 → 关物品弹窗 → 用 `origin` 页锚点校验回位 → 返回结果。
+### P3.7 · 战斗 / 扫荡 / 战利品（以任务形式实现）
 
-验收：假适配器离线跑通「进战 → 胜利 → 结算 → 物品 → 回位」与「未进战超时」两条路径；真机在 P5 验证。
+不做 `BattleAdapter` 协议、不做 `src/runtime/battle.py`。三者都是任务：
+
+| 任务 | 输入 | 输出 | 说明 |
+| --- | --- | --- | --- |
+| `BattleTask` | `origin`、`timeout` | `BattleResult(outcome, rewards, duration)` | 等进战 → 开自动/最高速 → 轮询胜负 → 关结算 → 回位校验 |
+| `SweepTask` | `stage`、`times`、`use_battle` | `Loot` | 首选扫荡；无扫荡或次数不足时按 `use_battle` 循环调用 `BattleTask` |
+| `LootTask` | 形态、区域 | `Loot` | 三种展示形态：弹窗、胜利页右下横向、扫荡三区域 |
+
+战利品抽象（仍是任务内部实现，不上升为框架协议）：
+
+- `LootItem(name, count, rarity)` / `Loot(items, source, raw_text)`；
+- 通用读取助手：`scroll_collect(region, direction, max_pages)`、`read_items(region, rows, cols)`；
+- 扫荡结算以右下「全部奖励」为权威，右侧逐次为明细，不一致时记警告。
+
+### P3.8 · 战利品策略（上锁等）
+
+`LootPolicy` 作为任务内的可插拔策略，不阻塞主流程：
+
+- `dry_run=True` 默认只报告「将会上锁 N 个」；
+- 先判「已上锁」再点，保证幂等；
+- 单次上限 `max_locks`，任何一步失败只记警告并跳过；
+- 品质阈值放任务 `default_config`（下拉：3 星以上 / 4 星以上 / 只锁 5 星），玩家可调。
+
+验收：资源关刷取后先 dry-run 报告，再真实上锁 1 个并复核。
 
 ### P4 · 详情页「运行一次」+ 批量联动
 
@@ -310,6 +339,8 @@ result = self.battle.fight(origin="arena", timeout=180)
 | `__init_subclass__` 与 MCP 校验冲突 | P1 阻塞 | 首日先做最小验证；不行则退化为显式调用 |
 | 沙箱权限 | 写文件失败 | 需要 `danger-full-access` 的操作提前说明 |
 | rebase 冲突 | 分支混乱 | P0 就把 `feat/global-runtime` 建好；冲突集中在 2 个文件 |
+| helper 任务共享 executor 状态 | 嵌套调用互相污染 | `call_task` 统一重置 `data`/`result`、跳过内层启动层、共享导航只读 `last_page`；重入直接抛错 |
+| 战利品三种形态差异大 | 读取逻辑碎片化 | 统一 `LootItem`/`Loot` + 两个滚动/网格助手；扫荡以总计为权威 |
 
 ## 6. 工作方式（与你的约定）
 

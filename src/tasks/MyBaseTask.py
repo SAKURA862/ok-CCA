@@ -285,6 +285,22 @@ class MyBaseTask(BaseTask):
         """点击模板，未匹配到时返回 False。"""
         return self._click_nav_template(template, None)
 
+    def stop_if(self, condition, reason: str = 'stopped') -> None:
+        """条件为真时终止流程。
+
+        Args:
+          condition: 判断函数，入参是任务；也可以直接传布尔值。
+          reason: 终止原因，写入日志与异常消息。
+
+        Raises:
+          FlowAborted: 条件为真。
+        """
+        from src.flow.steps import FlowAborted
+
+        hit = condition(self) if callable(condition) else bool(condition)
+        if hit:
+            raise FlowAborted(reason)
+
     def wait_template(self, template: str, timeout: float = DEFAULT_WAIT_TIMEOUT) -> bool:
         """等待模板出现。
 

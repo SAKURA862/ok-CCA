@@ -28,16 +28,18 @@ Point = Tuple[float, float]
 
 @dataclass(frozen=True)
 class _Targeted:
-    """带单个目标字段的动作基类。
+    """带单个目标的动作基类。
 
     Attributes:
-      template: 模板名。
-      point: 归一化坐标，或返回坐标的函数。
-      box: 像素框 ``(x, y, w, h)``。
+      target: 目标简写，模板名 / 二元组坐标 / 四元组框 / 函数。
+      template: 模板名，与 ``target`` 二选一。
+      point: 归一化坐标，与 ``target`` 二选一。
+      box: 像素框 ``(x, y, w, h)``，与 ``target`` 二选一。
       roi: 模板搜索区域，归一化 ``(x1, y1, x2, y2)``。
       relative: 框内相对位置。
     """
 
+    target: Any = None
     template: Optional[str] = None
     point: Any = None
     box: Optional[Sequence[float]] = None
@@ -46,18 +48,34 @@ class _Targeted:
     TARGET_REQUIRED = True
 
     def __post_init__(self):
-        targets.check_target(type(self).__name__, template=self.template, point=self.point,
-                             box=self.box, relative=self.relative,
-                             optional=not self.TARGET_REQUIRED)
+        fields = [name for name in ('target', 'template', 'point', 'box')
+                  if getattr(self, name) is not None]
+        if len(fields) > 1:
+            raise FlowConfigError(
+                f'{type(self).__name__} 只能给一个目标字段，当前为 {fields}')
+        if not fields:
+            if self.TARGET_REQUIRED:
+                raise FlowConfigError(
+                    f'{type(self).__name__} 需要 target/template/point/box 之一')
+            return
+        if self.target is None:
+            targets.check_target(type(self).__name__, template=self.template, point=self.point,
+                                 box=self.box, relative=self.relative,
+                                 optional=not self.TARGET_REQUIRED)
 
     def resolve(self, task: Any) -> Point:
         """解析出屏幕像素坐标。"""
+        if self.target is not None:
+            return targets.resolve_spec(task, self.target, self.roi, self.relative,
+                                        owner=type(self).__name__)
         return targets.resolve(task, template=self.template, point=self.point, box=self.box,
                                roi=self.roi, relative=self.relative,
                                owner=type(self).__name__)
 
     def describe(self) -> str:
         """返回用于日志的目标描述。"""
+        if self.target is not None:
+            return targets.describe_spec(self.target)
         return targets.describe_target(template=self.template, point=self.point, box=self.box,
                                        relative=self.relative)
 
@@ -102,7 +120,7 @@ class _TwoTargeted:
 
 
 @dataclass(frozen=True)
-class Tap(_Targeted):
+class Click(_Targeted):
     """单击目标。"""
 
     def run(self, task: Any) -> None:
@@ -112,7 +130,7 @@ class Tap(_Targeted):
 
 
 @dataclass(frozen=True)
-class DoubleTap(_Targeted):
+class DoubleClick(_Targeted):
     """双击目标。
 
     Attributes:
@@ -146,7 +164,7 @@ class LongPress(_Targeted):
 
 
 @dataclass(frozen=True)
-class RightTap(_Targeted):
+class RightClick(_Targeted):
     """右键点击目标，仅对支持右键的交互方式生效。"""
 
     def run(self, task: Any) -> None:
@@ -253,7 +271,7 @@ class KeyCombo:
 
 
 @dataclass(frozen=True)
-class TextInput:
+class InputText:
     """输入文本；给了目标时先点击目标再输入。
 
     Attributes:
@@ -275,18 +293,18 @@ class TextInput:
     settle: float = TEXT_SETTLE
 
     def __post_init__(self):
-        targets.check_target('TextInput', template=self.template, point=self.point,
+        targets.check_target('InputText', template=self.template, point=self.point,
                              box=self.box, relative=self.relative, optional=True)
         if not self.text:
-            raise FlowConfigError('TextInput 需要非空的 text')
+            raise FlowConfigError('InputText 需要非空的 text')
         if not all(32 <= ord(char) <= 126 for char in self.text):
-            raise FlowConfigError('TextInput 只支持 ASCII，中文请用剪贴板或输入法方案')
+            raise FlowConfigError('InputText 只支持 ASCII，中文请用剪贴板或输入法方案')
 
     def run(self, task: Any) -> None:
         """点击目标（可选）后输入文本。"""
         if self.template is not None or self.point is not None or self.box is not None:
             x, y = targets.resolve(task, template=self.template, point=self.point, box=self.box,
-                                   roi=self.roi, relative=self.relative, owner='TextInput')
+                                   roi=self.roi, relative=self.relative, owner='InputText')
             task.click(x, y)
             task.sleep(self.settle)
         task.input_text(self.text.replace(' ', '%s'))
@@ -311,8 +329,15 @@ def _press(task: Any, x: int, y: int, hold: float) -> None:
 
 
 def _drag(task: Any, start: Point, end: Point, duration: float, hold: float) -> None:
-    """分段拖到终点，停住 ``hold`` 秒后抬起。"""
+    """分段拖到终点，停住 ``hold`` 秒后抬起。
+
+    三种后端依次尝试：``motionevent``（Android）、鼠标按下/移动/抬起（Windows）、
+    ``swipe``（最后的近似实现，没有停留语义）。
+    """
     if not _use_motionevent(task):
+        if _use_mouse(task):
+            _drag_mouse(task, start, end, duration, hold)
+            return
         task.swipe(start[0], start[1], end[0], end[1], duration=duration, settle_time=hold)
         return
     task.adb_shell('input', 'motionevent', 'DOWN', int(start[0]), int(start[1]))
@@ -330,3 +355,30 @@ def _drag(task: Any, start: Point, end: Point, duration: float, hold: float) -> 
 def _use_motionevent(task: Any) -> bool:
     """判断是否可以用 ``adb shell input motionevent`` 做分段手势。"""
     return callable(getattr(task, 'adb_shell', None))
+
+
+def _use_mouse(task: Any) -> bool:
+    """判断是否可以按下、移动、抬起鼠标（Windows 后端）。"""
+    return all(callable(getattr(task, name, None)) for name in ('mouse_down', 'move', 'mouse_up'))
+
+
+def _drag_mouse(task: Any, start: Point, end: Point, duration: float, hold: float) -> None:
+    """鼠标版拖动：按下 → 分段移动 → 停住 → 抬起。"""
+    task.mouse_down(int(start[0]), int(start[1]))
+    step_sleep = max(duration, 0.0) / DRAG_STEPS
+    for index in range(1, DRAG_STEPS + 1):
+        ratio = index / DRAG_STEPS
+        x = int(round(start[0] + (end[0] - start[0]) * ratio))
+        y = int(round(start[1] + (end[1] - start[1]) * ratio))
+        task.sleep(step_sleep)
+        task.move(x, y)
+    task.sleep(hold)
+    task.mouse_up()
+
+
+# 旧名别名：``Tap`` / ``TextInput`` 等写法仍然可用，新代码请用动词开头的名字。
+Tap = Click
+DoubleTap = DoubleClick
+RightTap = RightClick
+TextInput = InputText
+

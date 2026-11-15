@@ -1,4 +1,4 @@
-"""编排层（P3.5）离线测试：``Step``/``Flow``/``StateMachine``、动作与任务接入。
+"""编排层离线测试：步骤、动作、驱动器与任务接入。
 
 运行：``python tests/test_flow.py``
 """
@@ -11,23 +11,26 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.flow import (  # noqa: E402
+    Click,
+    DoubleClick,
+    Drag,
     Flow,
+    FlowAborted,
     FlowConfigError,
     FlowFailed,
-    State,
-    StateMachine,
-    Step,
-)
-from src.flow.actions import (  # noqa: E402
-    Drag,
     KeyCombo,
     KeyPress,
     LongPress,
-    RightTap,
+    Loop,
+    RightClick,
+    State,
+    StateMachine,
+    Step,
+    Stop,
     Swipe,
-    Tap,
-    TextInput,
+    InputText,
 )
+from src.flow.actions import Tap  # noqa: E402  旧名别名
 from src.tasks.MyBaseTask import MyBaseTask  # noqa: E402
 
 BOX = (100, 200, 40, 20)
@@ -107,6 +110,9 @@ class FakeBehaviour:
     def mouse_down(self, x, y, key='left'):
         self.events.append(('down', x, y))
 
+    def move(self, x, y):
+        self.events.append(('move', x, y))
+
     def mouse_up(self, key='left'):
         self.events.append(('up',))
 
@@ -144,7 +150,7 @@ class FakeBehaviour:
     def input_events(self):
         """只取输入相关事件，过滤 find/wait/sleep。"""
         return [event for event in self.events if event[0] in
-                ('click', 'swipe', 'adb', 'down', 'up', 'key', 'key_down', 'key_up', 'text')]
+                ('click', 'swipe', 'adb', 'down', 'move', 'up', 'key', 'key_down', 'key_up', 'text')]
 
     @staticmethod
     def _take(queue_map, key):
@@ -168,18 +174,32 @@ class FakeTask(FakeBehaviour):
 def test_step_validation():
     expect_error(FlowConfigError, lambda: Step('', call=lambda t: None))
     expect_error(FlowConfigError, lambda: Step('x'))
-    expect_error(FlowConfigError, lambda: Step('x', click='a', key='b'))
+    expect_error(FlowConfigError, lambda: Step('x', click='a', key_press='b'))
     expect_error(FlowConfigError, lambda: Step('x', click='a', on_fail='ignore'))
     expect_error(FlowConfigError, lambda: Step('x', click='a', retry=-1))
     assert Step('x', click='a').attempts == 2
     assert Step('x', click='a', retry=3).attempts == 4
 
 
+def test_legacy_fields_report_migration():
+    expect_error(FlowConfigError, lambda: Step('x', click_point=(0.5, 0.5)))
+    expect_error(FlowConfigError, lambda: Step('x', key='esc'))
+
+
+def test_sugar_names_match_actions():
+    assert isinstance(Step('a', click='x').action, Click)
+    assert isinstance(Step('a', double_click='x').action, DoubleClick)
+    assert isinstance(Step('a', right_click='x').action, RightClick)
+    assert isinstance(Step('a', long_press='x').action, LongPress)
+    assert isinstance(Step('a', key_press='esc').action, KeyPress)
+    assert Tap is Click
+
+
 def test_flow_runs_in_order():
     task = FakeTask()
     flow = Flow([Step('a', click='btn_a'),
-                 Step('b', key='escape'),
-                 Step('c', click_point=(0.5, 0.6))])
+                 Step('b', key_press='escape'),
+                 Step('c', click=(0.5, 0.6))])
     flow.run(task)
     assert task.input_events() == [('click', *CENTER, 'left'),
                                    ('key', 'escape', 0.02),
@@ -198,6 +218,15 @@ def test_goto_only_step():
     task = FakeTask()
     Flow([Step('navigate', goto='home')]).run(task)
     assert task.events == [('ensure', 'home')], task.events
+
+
+def test_when_skips_step():
+    task = FakeTask()
+    Flow([Step('skip_me', click='btn', when=lambda t: False),
+          Step('run_me', click='ok')]).run(task)
+    assert [event for event in task.input_events() if event[0] == 'click'] == [
+        ('click', *CENTER, 'left')], task.input_events()
+    assert any('skip (when)' in message for message in task.infos), task.infos
 
 
 def test_retry_then_success():
@@ -242,12 +271,6 @@ def test_expect_false_fails():
     assert task.shots == ['flow_fail_FakeTask_check'], task.shots
 
 
-def test_click_point_callable():
-    task = FakeTask()
-    Flow([Step('p', click_point=lambda t: (0.25, 0.75))]).run(task)
-    assert task.input_events() == [('click', 480, 810, 'left')], task.input_events()
-
-
 def test_call_result_stored():
     task = FakeTask()
     Flow([Step('read', call=lambda t: 42)]).run(task)
@@ -260,12 +283,45 @@ def test_call_bound_method():
     assert task.data == {'read': 7}, task.data
 
 
+def test_flow_final_runs_on_success():
+    task = FakeTask()
+    Flow([Step('a', click='x')], final=[Step('wrap', click='y')]).run(task)
+    assert [event for event in task.input_events() if event[0] == 'click'] == [
+        ('click', *CENTER, 'left'), ('click', *CENTER, 'left')], task.input_events()
+
+
+def test_flow_final_runs_on_failure():
+    task = FakeTask()
+    task.missing['boom'] = 5
+    flow = Flow([Step('a', click='boom', retry=0)], final=[Step('wrap', click='y')])
+    expect_error(FlowFailed, lambda: flow.run(task))
+    assert task.data.get('error'), task.data
+    assert len([event for event in task.input_events() if event[0] == 'click']) == 1
+
+
+def test_stop_aborts_and_keeps_final():
+    task = FakeTask()
+    flow = Flow([Step('a', click='x'), Stop('够了'), Step('never', click='z')],
+                final=[Step('wrap', click='y')])
+    expect_error(FlowAborted, lambda: flow.run(task))
+    assert task.shots == [], task.shots
+    assert len([event for event in task.input_events() if event[0] == 'click']) == 2
+
+
+def test_duplicate_step_names_rejected():
+    expect_error(FlowConfigError, lambda: Flow([Step('a', click='x'), Step('a', click='y')]))
+
+
+def test_flow_rejects_unknown_node():
+    expect_error(FlowConfigError, lambda: Flow([Step('a', click='x'), 'not-a-step']))
+
+
 # -------------------------------------------------------------------- 动作层
 
 
-def test_action_tap_template():
+def test_action_click_template():
     task = FakeTask()
-    Flow([Step('t', action=Tap(template='btn'))]).run(task)
+    Flow([Step('t', action=Click(template='btn'))]).run(task)
     assert task.input_events() == [('click', *CENTER, 'left')], task.input_events()
 
 
@@ -273,16 +329,18 @@ def test_action_sugar_matches_object():
     sugar = FakeTask()
     explicit = FakeTask()
     Flow([Step('t', click='btn')]).run(sugar)
-    Flow([Step('t', action=Tap(template='btn'))]).run(explicit)
-    assert sugar.input_events() == explicit.input_events(), (sugar.input_events(), explicit.input_events())
+    Flow([Step('t', action=Click(template='btn'))]).run(explicit)
+    assert sugar.input_events() == explicit.input_events(), (
+        sugar.input_events(), explicit.input_events())
 
 
-def test_action_right_tap_and_double_tap():
+def test_action_right_click_and_double_click():
     task = FakeTask()
-    Flow([Step('r', action=RightTap(template='btn')),
-          Step('d', action=Tap(point=(0.1, 0.1)))]).run(task)
-    assert task.input_events() == [('click', *CENTER, 'right'),
-                                   ('click', 192, 108, 'left')], task.input_events()
+    Flow([Step('r', action=RightClick(template='btn')),
+          Step('d', action=DoubleClick(point=(0.1, 0.1)))]).run(task)
+    clicks = [event for event in task.input_events() if event[0] == 'click']
+    assert clicks[0] == ('click', *CENTER, 'right'), clicks
+    assert clicks[1:] == [('click', 192, 108, 'left'), ('click', 192, 108, 'left')], clicks
 
 
 def test_action_long_press_uses_motionevent():
@@ -297,21 +355,32 @@ def test_action_long_press_uses_motionevent():
 
 def test_action_swipe():
     task = FakeTask()
-    Flow([Step('s', action=Swipe(start=(0.8, 0.7), end=(0.8, 0.3), duration=0.4))]).run(task)
+    Flow([Step('s', action=Swipe(start=(0.8, 0.7), end=(0.8, 0.3),
+                                 duration=0.4))]).run(task)
     assert task.input_events() == [('swipe', (1536, 756), (1536, 324), 0.4)], task.input_events()
 
 
-def test_action_drag_holds_before_release():
+def test_action_drag_uses_motionevent():
     task = FakeTask()
-    Flow([Step('g', action=Drag(start=(0.5, 0.8), end=(0.5, 0.3), duration=0.6, hold=0.2))]).run(task)
+    Flow([Step('g', action=Drag(start=(0.5, 0.8), end=(0.5, 0.3),
+                                duration=0.6, hold=0.2))]).run(task)
     events = task.input_events()
     assert events[0] == ('adb', 'input', 'motionevent', 'DOWN', 960, 864), events[0]
     assert events[-1] == ('adb', 'input', 'motionevent', 'UP', 960, 324), events[-1]
     moves = [event for event in events if event[3] == 'MOVE']
     assert len(moves) == 6, moves
     assert moves[0][-2:] == (960, 774), moves[0]
-    sleep_after_last_move = task.events[task.events.index(events[-2]) + 1]
-    assert sleep_after_last_move == ('sleep', 0.2), sleep_after_last_move
+
+
+def test_action_drag_falls_back_to_mouse():
+    task = FakeTask()
+    task.adb_shell = None  # 模拟 Windows 后端：没有 adb
+    Flow([Step('g', action=Drag(start=(0.5, 0.8), end=(0.5, 0.3),
+                                hold=0.2))]).run(task)
+    events = task.input_events()
+    assert events[0] == ('down', 960, 864), events
+    assert [event for event in events if event[0] == 'move'], events
+    assert events[-1] == ('up',), events
 
 
 def test_action_key_hold_and_combo():
@@ -327,7 +396,7 @@ def test_action_key_hold_and_combo():
 
 def test_action_text_input_with_target():
     task = FakeTask()
-    Flow([Step('t', action=TextInput('hello world', template='search'))]).run(task)
+    Flow([Step('t', action=InputText('hello world', template='search'))]).run(task)
     assert task.input_events() == [('click', *CENTER, 'left'), ('text', 'hello%sworld')], \
         task.input_events()
     assert ('sleep', 0.4) in task.events
@@ -335,21 +404,21 @@ def test_action_text_input_with_target():
 
 def test_action_text_input_without_target():
     task = FakeTask()
-    Flow([Step('t', action=TextInput('abc'))]).run(task)
+    Flow([Step('t', action=InputText('abc'))]).run(task)
     assert task.input_events() == [('text', 'abc')], task.input_events()
 
 
 def test_action_validation():
-    expect_error(FlowConfigError, lambda: Tap())
-    expect_error(FlowConfigError, lambda: Tap(template='x', point=(0.1, 0.1)))
-    expect_error(FlowConfigError, lambda: Tap(point=(0.1, 0.1), relative=(0.9, 0.9)))
-    expect_error(FlowConfigError, lambda: Step('x', action=Tap('a'), click='b'))
-    expect_error(FlowConfigError, lambda: Step('x', action=Tap('a'), call=lambda t: 1))
-    expect_error(FlowConfigError, lambda: TextInput('中文'))
+    expect_error(FlowConfigError, lambda: Click())
+    expect_error(FlowConfigError, lambda: Click(template='x', point=(0.1, 0.1)))
+    expect_error(FlowConfigError, lambda: Click(point=(0.1, 0.1), relative=(0.9, 0.9)))
+    expect_error(FlowConfigError, lambda: Step('x', action=Click('a'), click='b'))
+    expect_error(FlowConfigError, lambda: Step('x', action=Click('a'), call=lambda t: 1))
+    expect_error(FlowConfigError, lambda: InputText('中文'))
     expect_error(FlowConfigError, lambda: KeyCombo(('ctrl',)))
 
 
-# ---------------------------------------------------------------- 状态机与任务
+# ---------------------------------------------------------------- 状态机与循环
 
 
 def test_state_machine_branching():
@@ -374,15 +443,62 @@ def test_state_machine_max_transitions():
     expect_error(FlowFailed, lambda: machine.run(task))
 
 
-def test_state_machine_step_list():
+def test_state_machine_step_list_and_flow():
     task = FakeTask()
     machine = StateMachine({
-        'only': State('only', goto='home', do=[Step('a', click='x'), Step('b', key='esc')]),
+        'only': State('only', goto='home', do=[
+            Step('a', click='x'),
+            Flow([Step('b', key_press='esc')]),
+        ]),
     })
     machine.run(task)
     assert task.events[0] == ('ensure', 'home'), task.events
     assert task.input_events() == [('click', *CENTER, 'left'), ('key', 'esc', 0.02)], \
         task.input_events()
+
+
+def test_state_machine_final_and_key_mismatch():
+    task = FakeTask()
+    machine = StateMachine({'a': State('a', do=lambda t: None)},
+                           final=[Step('wrap', click='y')])
+    machine.run(task)
+    assert [event for event in task.input_events() if event[0] == 'click'] == [
+        ('click', *CENTER, 'left')], task.input_events()
+    expect_error(FlowConfigError, lambda: StateMachine({'a': State('b')}))
+
+
+def test_loop_until_condition():
+    task = FakeTask()
+
+    def bump(t):
+        t.data['n'] = t.data.get('n', 0) + 1
+
+    rounds = Loop([Step('tick', call=bump)], until=lambda t: t.data['n'] >= 3,
+                  times=10).run(task)
+    assert rounds == 3, rounds
+    assert task.data['n'] == 3, task.data
+
+
+def test_loop_exhausted():
+    task = FakeTask()
+    expect_error(FlowFailed, lambda: Loop([Step('tick', call=lambda t: None)],
+                                          until=lambda t: False, times=2).run(task))
+    task2 = FakeTask()
+    rounds = Loop([Step('tick', call=lambda t: None)], until=lambda t: False,
+                  times=2, on_exhausted='warn').run(task2)
+    assert rounds == 2, rounds
+    assert task2.warnings, task2.warnings
+
+
+def test_loop_stop_and_final():
+    task = FakeTask()
+    flow = Loop([Step('a', click='x'), Stop('done')], times=5,
+                final=[Step('wrap', click='y')])
+    expect_error(FlowAborted, lambda: flow.run(task))
+    assert len([event for event in task.input_events() if event[0] == 'click']) == 2
+
+
+# ----------------------------------------------------------------------- 任务
 
 
 class ProbeTask(FakeBehaviour, MyBaseTask):
@@ -414,35 +530,55 @@ def test_missing_flow_raises():
     expect_error(Exception, task.run)
 
 
+def test_stop_if_helper():
+    task = object.__new__(ProbeTask)
+    task.setup()
+    flow = Flow([Step('check', call=lambda t: t.stop_if(True, '够了'))])
+    expect_error(FlowAborted, lambda: flow.run(task))
+
+
 def main() -> int:
     for name, func in [
         ('step.validation', test_step_validation),
+        ('step.legacy_fields', test_legacy_fields_report_migration),
+        ('step.sugar_names', test_sugar_names_match_actions),
         ('flow.order', test_flow_runs_in_order),
         ('flow.goto', test_flow_goto_before_action),
         ('flow.goto_only', test_goto_only_step),
+        ('flow.when', test_when_skips_step),
         ('flow.retry_then_success', test_retry_then_success),
         ('flow.retry_exhausted', test_retry_exhausted_aborts_with_evidence),
         ('flow.on_fail_skip', test_on_fail_skip),
         ('flow.optional', test_optional_wait_timeout_is_not_failure),
         ('flow.expect_false', test_expect_false_fails),
-        ('flow.click_point', test_click_point_callable),
         ('flow.call_result', test_call_result_stored),
         ('flow.call_bound_method', test_call_bound_method),
-        ('action.tap_template', test_action_tap_template),
+        ('flow.final_ok', test_flow_final_runs_on_success),
+        ('flow.final_error', test_flow_final_runs_on_failure),
+        ('flow.stop', test_stop_aborts_and_keeps_final),
+        ('flow.duplicate_names', test_duplicate_step_names_rejected),
+        ('flow.unknown_node', test_flow_rejects_unknown_node),
+        ('action.click_template', test_action_click_template),
         ('action.sugar_matches_object', test_action_sugar_matches_object),
-        ('action.right_and_point', test_action_right_tap_and_double_tap),
+        ('action.right_and_double', test_action_right_click_and_double_click),
         ('action.long_press', test_action_long_press_uses_motionevent),
         ('action.swipe', test_action_swipe),
-        ('action.drag', test_action_drag_holds_before_release),
+        ('action.drag_motionevent', test_action_drag_uses_motionevent),
+        ('action.drag_mouse', test_action_drag_falls_back_to_mouse),
         ('action.key_hold_and_combo', test_action_key_hold_and_combo),
         ('action.text_with_target', test_action_text_input_with_target),
         ('action.text_without_target', test_action_text_input_without_target),
         ('action.validation', test_action_validation),
         ('state.branching', test_state_machine_branching),
         ('state.max_transitions', test_state_machine_max_transitions),
-        ('state.step_list', test_state_machine_step_list),
+        ('state.step_list', test_state_machine_step_list_and_flow),
+        ('state.final', test_state_machine_final_and_key_mismatch),
+        ('loop.until', test_loop_until_condition),
+        ('loop.exhausted', test_loop_exhausted),
+        ('loop.stop', test_loop_stop_and_final),
         ('task.build_flow_end_to_end', test_build_flow_task_end_to_end),
         ('task.missing_flow', test_missing_flow_raises),
+        ('task.stop_if', test_stop_if_helper),
     ]:
         check(name, func)
 

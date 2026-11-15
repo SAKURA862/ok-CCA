@@ -151,18 +151,29 @@ class ArenaTask(MyBaseTask):
 | --- | --- |
 | `name` | 步骤名，用于日志与失败截图 |
 | `goto` | 执行前先 `ensure_page` 到该页；只写 `goto` 就是纯导航步骤 |
-| `action` | 输入动作对象，如 `Tap(template='x')`，见「动作层」 |
-| `click` | 语法糖，等价于 `Tap(template=...)` |
-| `click_point` | 语法糖，等价于 `Tap(point=...)`，可写 `lambda task: (x, y)` |
-| `key` | 语法糖，等价于 `KeyPress(...)` |
+| `action` | 输入动作对象，如 `Click('x')`，见「动作层」 |
+| `click` | 语法糖，等价于 `Click(target)`，目标可为模板/坐标/框/lambda |
+| `double_click` / `right_click` / `long_press` | 语法糖，分别等价 `DoubleClick` / `RightClick` / `LongPress` |
+| `key_press` | 语法糖，等价于 `KeyPress(...)` |
 | `call` | 自定义函数（可传任务方法），返回值写入 `task.data[name]` |
 | `wait` | 动作后必须出现的模板名（默认等 8s，`settle_time=0.3`） |
 | `expect` | 额外断言 `lambda task: bool` |
 | `retry` | 失败重试次数，默认 1 |
 | `on_fail` | `retry` / `skip` / `abort`，默认 `abort` |
 | `optional` | 为真时失败只记警告并继续 |
+| `when` | 前置守卫 `lambda task: bool`，为假时跳过整步（不算失败） |
+| `action` 简写 | `click=` / `double_click=` / `right_click=` / `long_press=` / `key_press=` |
 
-`action` 与 `call` 互斥，语法糖字段与 `action` 互斥且三个糖只能用一个；三样都没给时必须给 `goto`。失败重试用尽后截图 `flow_fail_<任务>_<步骤>`。
+`action` 与 `call` 互斥；语法糖与 `action` 互斥且一次只能用一个；三者都没给时必须给 `goto`。失败重试用尽后截图 `flow_fail_<任务>_<步骤>`。同容器内步骤名必须唯一。
+
+### 流程收尾与提前结束
+
+```python
+Flow(steps, final=[Step('回主页', goto='home')])      # final 无论成功失败都执行
+Step('x', click='y', when=lambda t: t.data['enabled'])  # 条件跳过
+Flow([... , Stop('次数用完')])                          # 主动结束，final 仍执行
+Step('check', call=lambda t: t.stop_if(cond, '够了'))    # 在 call 里结束
+```
 
 ### 动作层
 
@@ -172,33 +183,33 @@ class ArenaTask(MyBaseTask):
 
 | 写法 | 含义 |
 | --- | --- |
-| `template='arena_deploy_button'` | 模板匹配，按 `relative` 取框内点（默认中心） |
-| `point=(0.87, 0.90)` | 归一化坐标；两分量都 ≤1 时按归一化处理，否则当像素 |
-| `box=(120, 200, 300, 260)` | 业务函数算出的像素框 |
+| `'arena_deploy_button'` | 模板匹配，按 `relative` 取框内点（默认中心） |
+| `(0.87, 0.90)` | 归一化坐标；两分量都 ≤1 时按归一化处理，否则当像素 |
+| `(120, 200, 300, 260)` | 业务函数算出的像素框 |
 
 | 动作 | 关键参数 | 底层 |
 | --- | --- | --- |
-| `Tap` | — | `click` |
-| `DoubleTap` | `interval=0.12` | 两次 `click` |
+| `Click` | — | `click` |
+| `DoubleClick` | `interval=0.12` | 两次 `click` |
 | `LongPress` | `hold=1.0` | `input motionevent DOWN/UP` |
-| `RightTap` | — | `click(key='right')` |
+| `RightClick` | — | `click(key='right')` |
 | `Swipe` | `start` / `end` / `duration=0.5` | `swipe`，保留惯性 |
 | `Drag` | `start` / `end` / `duration=0.6` / `hold=0.2` | 分段 `motionevent`，抬起前停住 |
 | `KeyPress` | `key` / `hold=0.02`，`hold>0.15` 走长按 | `send_key` / `send_key_down`+`send_key_up` |
 | `KeyCombo` | `keys` / `hold=0.05` | 依次按下、逆序抬起 |
-| `TextInput` | `text` + 可选目标 / `settle=0.4` | 先点击目标再 `input_text` |
+| `InputText` | `text` + 可选目标 / `settle=0.4` | 先点击目标再 `input_text` |
 
 ```python
 Flow([
-    Step('长按卡片', action=LongPress(template='arena_card', hold=1.2)),
+    Step('长按卡片', action=LongPress('arena_card', hold=1.2)),
     Step('下滑列表', action=Swipe(start='arena_list_top', end=(0.5, 0.25), duration=0.6)),
     Step('精确拖到起点', action=Drag(start=(0.5, 0.8), end=(0.5, 0.3), hold=0.2)),
-    Step('搜索', action=TextInput('sword', template='search_box')),
+    Step('搜索', action=InputText('sword', 'search_box')),
     Step('关掉面板', action=KeyPress('escape')),
 ])
 ```
 
-`Swipe` / `Drag` 的 `start`、`end` 是「目标简写」：字符串当模板名、二元组当坐标、四元组当框、函数运行时求值。`TextInput` 不给目标时直接输入（适合已经点过输入框的场景），只支持 ASCII，空格自动转 `%s`。
+`Swipe` / `Drag` 的 `start`、`end` 是「目标简写」：字符串当模板名、二元组当坐标、四元组当框、函数运行时求值。`InputText` 不给目标时直接输入（适合已经点过输入框的场景），只支持 ASCII，空格自动转 `%s`。
 
 ### 线性：Flow
 
@@ -241,12 +252,86 @@ class ArenaTask(MyBaseTask):
 - 每步结束调用 `report_progress()`，弹窗层的 8s 卡住判定不会误报；
 - 每步记一条 `flow: <步骤> (120ms)` 日志，日志页可见。
 
+## 任务调用任务（设计，P3.6 实现）
+
+ok-script 只调用无参的 `task.run()`，也不接收返回值。要让一个任务带上参数和返回值，由框架提供基类适配，而不是让开发者额外写胶水函数。
+
+### `CallableTask`
+
+```python
+class BattleTask(CallableTask):
+    SKIP_GAME_BOOTSTRAP = True
+
+    def execute(self, origin: str, timeout: float = 180.0) -> BattleResult:
+        ...
+        return BattleResult(outcome, rewards, elapsed)
+```
+
+开发者只写 `execute(...)`：签名就是参数表，`return` 就是返回值。基类的 `run()` 负责：
+
+1. 调 `ensure_game_ready()`（启动层照常生效）；
+2. 用 `inspect.signature` 绑定 `self.call_args`，缺必填参数时抛 `TaskCallError('BattleTask 需要参数：origin')`；
+3. 调 `execute(**kwargs)`，结果存进 `self.result` 并返回。
+
+GUI / CLI / MCP 仍然调无参 `run()`，未传的必填参数会得到上面那句明确报错，而不是参数栈。
+
+### 调用方
+
+```python
+Step('挑战', click='arena_challenge',
+     call=lambda t: t.call_task(BattleTask, origin='arena', timeout=240))
+Step('赢了继续', expect=lambda t: t.data['挑战'].win)
+```
+
+`call_task` 的语义：同步阻塞、返回 `execute` 的返回值、`Step(call=...)` 自动写入 `task.data[步骤名]`。
+
+- 重入保护：同一任务在调用链上出现两次直接抛错，嵌套深度上限 3；
+- 内层跳过启动层（外层已经拉起游戏）；
+- 内层导航共享外层的 `last_page` 提示，不重复全量扫描；
+- 内层异常包成 `TaskCallError('<外层> -> <内层>: ...')` 并留 `call_fail_<任务>` 截图；
+- 每次调用清空内层 `data`/`result`，避免上次残留。
+
+### helper 任务不进 GUI
+
+`src/config.py` 的 `helper_tasks` 声明的任务只实例化，不加入 `onetime_tasks`/`trigger_tasks`，因此首页、任务设定、MCP `list_tasks` 都看不到它们。它们仍是普通 `MyBaseTask` 子类，导航、弹窗、编排、启动层全部继承。
+
+### 装饰器（可选糖）
+
+```python
+@callable_task(name='战斗', icon=FluentIcon.GAME)
+def battle(task, origin: str, timeout: float = 180.0) -> BattleResult:
+    ...
+```
+
+等价于生成一个 `CallableTask` 子类，注册仍走 `helper_tasks` 或 `helpers.register()`。
+
+### 战斗 / 扫荡 / 战利品都写成任务
+
+框架不再提供 `BattleAdapter` 之类的协议。三者都是 helper 任务，通过 `call_task` 组合：
+
+| 任务 | 输入 | 输出 |
+| --- | --- | --- |
+| `BattleTask` | `origin`、`timeout` | `BattleResult(outcome, rewards, duration)` |
+| `SweepTask` | `stage`、`times`、`use_battle` | `Loot` |
+| `LootTask` | 展示形态、区域 | `Loot` |
+
+- 扫荡不是战斗的一种：能扫荡就用扫荡面板，不能或次数不足时再按 `use_battle` 循环调用 `BattleTask`；
+- 战利品有三种展示形态，由 `LootTask` 内部按形态读取，统一返回 `LootItem(name, count, rarity)` 列表：
+
+| 形态 | 读取方式 | 关闭方式 |
+| --- | --- | --- |
+| 竞技场弹窗（代币） | 弹窗正文 ROI 做 OCR，正则取 `名称 x 数量` | 点关闭按钮 |
+| 胜利页右下奖励 | 右下区域横向翻页，逐格 OCR 名称与数量 | 点空白 / 关闭按钮 |
+| 扫荡结算（左上成功、右侧逐次、右下总计） | 右下总计为权威，右侧逐次作明细；两者不一致记警告 | 点关闭按钮 |
+
+- 上锁这类副作用放进 `LootPolicy`：默认 `dry_run`、先判已锁、单次上限、失败只记警告。
+
 ## 已知限制
 
 - 导航只支持模板匹配，不做 OCR 页面识别。
 - 图需要手工标注：每页 1 张锚点、每条边 1 张按钮模板。
 - `Drag` / `LongPress` 依赖 `input motionevent`（Android 11+），不支持时自动退回 `swipe` / `mouse_down`。
-- `RightTap` 只对支持右键的交互方式（PostMessage、pynput 等）有效，ADB 会当普通点击。
-- `TextInput` 只支持 ASCII；中文需要剪贴板或输入法方案。
+- `RightClick` 只对支持右键的交互方式（PostMessage、pynput 等）有效，ADB 会当普通点击。
+- `InputText` 只支持 ASCII；中文需要剪贴板或输入法方案。
 - 弹窗规则只订阅 `logging.getLogger("ok")`；项目外的日志不会进入日志页。
 - 底边栏日志的「暂停」只作用于页面视图，面板继续刷新。

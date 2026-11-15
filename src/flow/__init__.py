@@ -1,31 +1,36 @@
-"""编排层：``Flow`` 线性步骤、``StateMachine`` 守卫状态机与输入动作。"""
+"""编排层：步骤、驱动器与输入动作。"""
 
-from src.flow.actions import (DoubleTap, Drag, KeyCombo, KeyPress, LongPress,
-                              RightTap, Swipe, Tap, TextInput)
-from src.flow.flow import DEFAULT_WAIT_TIMEOUT, Flow, run_step
+from src.flow.actions import (Click, DoubleClick, Drag, InputText, KeyCombo,
+                              KeyPress, LongPress, RightClick, Swipe)
+from src.flow.flow import DEFAULT_WAIT_TIMEOUT, Flow, run_step, run_steps
+from src.flow.loop import Loop
 from src.flow.state import DEFAULT_MAX_TRANSITIONS, State, StateMachine
-from src.flow.steps import (FlowConfigError, FlowError, FlowFailed, Step,
-                            Transition)
+from src.flow.steps import (FlowAborted, FlowConfigError, FlowError, FlowFailed,
+                            Step, Stop, Transition)
 
 __all__ = [
+    'Click',
     'DEFAULT_MAX_TRANSITIONS',
     'DEFAULT_WAIT_TIMEOUT',
-    'DoubleTap',
+    'DoubleClick',
     'Drag',
     'Flow',
+    'FlowAborted',
     'FlowConfigError',
     'FlowError',
     'FlowFailed',
+    'InputText',
     'KeyCombo',
     'KeyPress',
     'LongPress',
-    'RightTap',
+    'Loop',
+    'RightClick',
     'State',
     'StateMachine',
     'Step',
+    'Stop',
     'Swipe',
-    'Tap',
-    'TextInput',
     'Transition',
     'run_step',
+    'run_steps',
 ]
