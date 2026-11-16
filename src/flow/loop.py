@@ -21,8 +21,9 @@ class Loop:
 
     def __init__(self, steps: Iterable[Any], *, until: Optional[Callable[[Any], bool]] = None,
                  times: int = 10, on_exhausted: str = 'abort',
-                 final: Optional[Iterable[Any]] = None):
-        self.steps: Tuple[Any, ...] = check_nodes('Loop', steps)
+                 final: Optional[Iterable[Any]] = None, name: str = 'loop'):
+        self.name = name
+        self.steps: Tuple[Any, ...] = check_nodes(f'{name}', steps)
         self.final: Tuple[Any, ...] = check_nodes('Loop.final', final or ())
         self.until = until
         self.times = int(times)

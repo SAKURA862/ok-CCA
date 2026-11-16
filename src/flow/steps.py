@@ -26,6 +26,10 @@ class FlowFailed(FlowError):
     """步骤执行失败且不再重试。"""
 
 
+class TargetMissing(FlowFailed):
+    """动作目标未匹配：确定性失败，不进入重试。"""
+
+
 class FlowAborted(FlowFailed):
     """流程被 ``Stop`` 主动终止。"""
 
@@ -44,7 +48,9 @@ class Step:
       long_press: 语法糖，等价于 ``LongPress(target)``，hold 取默认值。
       key_press: 语法糖，等价于 ``KeyPress(key)``。
       call: 自定义函数，返回值写入 ``task.data[name]``。
-      wait: 动作后必须出现的模板名。
+      wait: 动作后必须出现的模板名，可给多个（任一出现即算成功）。
+      wait_timeout: 单次等待模板的上限（秒），默认 2；页面跳转可调大到 8。
+      retry_delay: 两次尝试之间的固定间隔（秒），默认 0.3。
       expect: 额外的断言函数，返回 False 视为失败。
       retry: 失败后的重试次数，0 表示只执行一次。
       on_fail: 重试用尽后的处理：``retry`` / ``skip`` / ``abort``。
@@ -62,8 +68,10 @@ class Step:
     key_press: Optional[str] = None
     call: Optional[Callable[[Any], Any]] = None
     wait: Optional[str] = None
+    wait_timeout: float = 2.0
+    retry_delay: float = 0.3
     expect: Optional[Callable[[Any], bool]] = None
-    retry: int = 1
+    retry: int = 5
     on_fail: str = 'abort'
     optional: bool = False
     when: Optional[Callable[[Any], bool]] = None

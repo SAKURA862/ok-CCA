@@ -2,7 +2,7 @@
 
 from typing import Any, Callable, Optional, Sequence, Tuple
 
-from src.flow.steps import FlowConfigError, FlowFailed
+from src.flow.steps import FlowConfigError, FlowFailed, TargetMissing
 
 Point = Tuple[float, float]
 BoxSpec = Sequence[float]
@@ -131,7 +131,7 @@ def _find(task: Any, template: str, roi: Optional[Sequence[float]], owner: str) 
     threshold = float(getattr(task, 'nav_settings', {}).get('threshold', 0.8))
     found = task.find_one(template, box=box_arg, threshold=threshold)
     if found is None:
-        raise FlowFailed(f'{owner} 模板未匹配: {template}')
+        raise TargetMissing(f'{owner} 模板未匹配: {template}')
     return found
 
 

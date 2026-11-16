@@ -4,9 +4,10 @@ import inspect
 import time
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
-from src.flow.steps import FlowAborted, FlowConfigError, FlowFailed, Step, Stop
+from src.flow.steps import FlowAborted, FlowConfigError, FlowFailed, Step, Stop, TargetMissing
 
 DEFAULT_WAIT_TIMEOUT = 8.0
+MAX_RETRY_DELAY = 2.0
 
 Node = Any  # Step 或 Stop
 
@@ -43,6 +44,9 @@ def run_step(task: Any, step: Node, *, wait_timeout: float = DEFAULT_WAIT_TIMEOU
     if isinstance(step, Stop):
         task.log_warning(f'flow: {step.describe()}')
         raise FlowAborted(step.reason)
+    if not isinstance(step, Step):
+        step.run(task)
+        return
     if step.when is not None and not _call(step.when, task):
         task.log_info(f'flow: {step.name} skip (when)')
         return
@@ -55,12 +59,18 @@ def run_step(task: Any, step: Node, *, wait_timeout: float = DEFAULT_WAIT_TIMEOU
             _run_action(task, step)
             _wait_after(task, step, wait_timeout)
             _check_expect(task, step)
-        except FlowAborted:
+        except (FlowAborted, TargetMissing):
             raise
         except Exception as error:  # noqa: BLE001 - 任何异常都算这一步失败
             last_error = error
+            elapsed = (time.monotonic() - started) * 1000
+            failures = task.data.setdefault('flow_failures', {})
+            failures[step.name] = failures.get(step.name, 0) + 1
             if attempt < step.attempts:
-                task.log_warning(f'flow: {step.describe()} 第 {attempt} 次失败，重试: {error}')
+                task.log_warning(
+                    f'flow: {step.describe()} 第 {attempt}/{step.attempts} 次失败'
+                    f'（{elapsed:.0f}ms），重试: {error}')
+                task.sleep(step.retry_delay)
                 continue
             break
         task.report_progress()
@@ -101,9 +111,16 @@ def _call(func: Any, task: Any) -> Any:
     return func() if not params else func(task)
 
 
-def _wait_after(task: Any, step: Step, timeout: float) -> None:
-    if step.wait and not task.wait_template(step.wait, timeout):
-        raise FlowFailed(f'等待模板超时: {step.wait}')
+def _wait_after(task: Any, step: Any, timeout: float) -> None:
+    if not step.wait:
+        return
+    names = (step.wait,)
+    limit = getattr(step, 'wait_timeout', None) or timeout
+    found = task.wait_until(
+        lambda: any(task.find_one(name) for name in names),
+        time_out=limit, settle_time=0)
+    if not found:
+        raise FlowFailed('等待模板超时: ' + ', '.join(names))
 
 
 def _check_expect(task: Any, step: Step) -> None:
@@ -127,8 +144,8 @@ def check_nodes(owner: str, nodes: Iterable[Node]) -> Tuple[Node, ...]:
     result = tuple(nodes)
     seen = set()
     for node in result:
-        if not isinstance(node, (Step, Stop)):
-            raise FlowConfigError(f'{owner} 只接受 Step 或 Stop，收到 {type(node).__name__}')
+        if not isinstance(node, (Step, Stop)) and not callable(getattr(node, 'run', None)):
+            raise FlowConfigError(f'{owner} 只接受 Step/Stop/可运行节点，收到 {type(node).__name__}')
         if isinstance(node, Stop):
             continue
         if node.name in seen:

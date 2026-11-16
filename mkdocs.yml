@@ -39,6 +39,8 @@ nav:
       - 应用配置: configuration.md
       - 运行时框架: framework.md
       - 编排与任务调用: flow-guide.md
+      - 任务实现模型: task-model.md
+      - 类图与分层: class-diagram.md
       - 任务开发: tasks.md
       - 打包与发布: release.md
       - 文档网站: documentation.md

@@ -4,6 +4,7 @@
 """
 
 import sys
+import time as _time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ from src.flow import (  # noqa: E402
     InputText,
 )
 from src.flow.actions import Tap  # noqa: E402  旧名别名
+from src.flow.steps import TargetMissing  # noqa: E402
 from src.tasks.MyBaseTask import MyBaseTask  # noqa: E402
 
 BOX = (100, 200, 40, 20)
@@ -97,6 +99,15 @@ class FakeBehaviour:
             self.missing[name] = left - 1
             return None
         return FakeBox(*BOX)
+
+    def wait_until(self, condition, time_out=0, settle_time=0, **kwargs):
+        deadline = _time.monotonic() + (time_out or 0)
+        while True:
+            if condition():
+                return True
+            if _time.monotonic() >= deadline:
+                return False
+            _time.sleep(0.01)
 
     def click(self, x, y, key='left'):
         self.events.append(('click', x, y, key))
@@ -177,7 +188,7 @@ def test_step_validation():
     expect_error(FlowConfigError, lambda: Step('x', click='a', key_press='b'))
     expect_error(FlowConfigError, lambda: Step('x', click='a', on_fail='ignore'))
     expect_error(FlowConfigError, lambda: Step('x', click='a', retry=-1))
-    assert Step('x', click='a').attempts == 2
+    assert Step('x', click='a').attempts == 6
     assert Step('x', click='a', retry=3).attempts == 4
 
 
@@ -231,35 +242,69 @@ def test_when_skips_step():
 
 def test_retry_then_success():
     task = FakeTask()
-    task.missing['btn'] = 1
-    Flow([Step('click', click='btn', retry=1)]).run(task)
-    assert len([event for event in task.events if event == ('find', 'btn')]) == 2, task.events
-    assert len([event for event in task.input_events() if event[0] == 'click']) == 1
+    seen = {'n': 0}
+
+    def ok_after_first(t):
+        seen['n'] += 1
+        return seen['n'] > 1
+
+    Flow([Step('click', click='ok', expect=ok_after_first, retry=1)]).run(task)
+    clicks = [event for event in task.input_events() if event[0] == 'click']
+    assert len(clicks) == 2, task.events
     assert task.warnings and '重试' in task.warnings[0], task.warnings
 
 
 def test_retry_exhausted_aborts_with_evidence():
     task = FakeTask()
-    task.missing['btn'] = 5
-    expect_error(FlowFailed, lambda: Flow([Step('open', click='btn', retry=1)]).run(task))
+    task.missing['title'] = 99
+    expect_error(FlowFailed, lambda: Flow([
+        Step('open', click='ok', wait='title', retry=1, wait_timeout=0.2)]).run(task))
     assert task.shots == ['flow_fail_FakeTask_open'], task.shots
+
+
+def test_wait_returns_as_soon_as_template_appears():
+    task = FakeTask()
+    started = _time.monotonic()
+    Flow([Step('go', click='ok', wait='title', wait_timeout=5.0)]).run(task)
+    assert _time.monotonic() - started < 1.0, '模板已存在时不应等满窗口'
+
+
+def test_wait_timeout_bounds_each_attempt():
+    task = FakeTask()
+    task.missing['popup'] = 99
+    started = _time.monotonic()
+    expect_error(FlowFailed,
+                 lambda: Flow([Step('go', click='ok', wait='popup',
+                                    wait_timeout=0.5, retry=1)]).run(task))
+    elapsed = _time.monotonic() - started
+    assert 1.0 <= elapsed < 2.5, f'两次尝试应约 1s，实际 {elapsed:.2f}s'
+    assert len(task.data.get('flow_failures', {})) == 1
+
+def test_missing_target_is_not_retried():
+    task = FakeTask()
+    task.missing['btn'] = 99
+    expect_error(TargetMissing,
+                 lambda: Flow([Step('go', click='btn', retry=3)]).run(task))
+    clicks = [event for event in task.input_events() if event[0] == 'click']
+    assert clicks == [], task.events
+    assert not task.warnings, task.warnings
 
 
 def test_on_fail_skip():
     task = FakeTask()
-    task.missing['missing'] = 5
-    flow = Flow([Step('bad', click='missing', retry=0, on_fail='skip'),
+    task.missing['title'] = 99
+    flow = Flow([Step('bad', click='ok', wait='title', retry=0, wait_timeout=0.2,
+                      on_fail='skip'),
                  Step('good', click='ok')])
     flow.run(task)
-    assert [event for event in task.input_events() if event[0] == 'click'] == [
-        ('click', *CENTER, 'left')], task.input_events()
+    assert len([event for event in task.input_events() if event[0] == 'click']) == 2, task.events
     assert not task.shots
 
 
 def test_optional_wait_timeout_is_not_failure():
     task = FakeTask()
-    task.wait_results['popup'] = [False]
-    Flow([Step('maybe', click='btn', wait='popup', optional=True)]).run(task)
+    task.missing['popup'] = 99
+    Flow([Step('maybe', click='ok', wait='popup', wait_timeout=0.1, optional=True)]).run(task)
     assert task.warnings, '应记录一条跳过警告'
     assert not task.shots
 
@@ -548,6 +593,9 @@ def main() -> int:
         ('flow.when', test_when_skips_step),
         ('flow.retry_then_success', test_retry_then_success),
         ('flow.retry_exhausted', test_retry_exhausted_aborts_with_evidence),
+        ('flow.wait_early', test_wait_returns_as_soon_as_template_appears),
+        ('flow.wait_timeout_bound', test_wait_timeout_bounds_each_attempt),
+        ('flow.missing_no_retry', test_missing_target_is_not_retried),
         ('flow.on_fail_skip', test_on_fail_skip),
         ('flow.optional', test_optional_wait_timeout_is_not_failure),
         ('flow.expect_false', test_expect_false_fails),
