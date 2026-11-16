@@ -1,6 +1,7 @@
 """项目任务基类：在 ``run()`` 前挂启动层，并提供弹窗层与导航层入口。"""
 
 import functools
+import inspect
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,6 +53,8 @@ class MyBaseTask(BaseTask):
         self._last_stuck_check = 0.0
         self._locator = None
         self._navigator = None
+        # 调用栈深度：任务调用任务的上限控制
+        self._call_depth = 0
         # 步骤/状态机之间共享的数据，``Step(call=...)`` 的结果也放这里
         self.data = {}
 
@@ -189,22 +192,37 @@ class MyBaseTask(BaseTask):
                 warn=self.log_warning,
                 max_hops=int(self.nav_settings.get('max_hops', 6)),
             )
+            hint = getattr(self, '_nav_hint', None)
+            if hint:
+                self._navigator.last_page = hint
         return self._navigator
 
     def current_page(self) -> str:
         """识别并返回当前页面 id。"""
         return self.navigator.locate()
 
-    def goto(self, page: str):
-        """导航到指定页面。
+    def goto(self, page: str, *, attempts: int = 3):
+        """导航到指定页面，失败时按返回键退回并重新规划。
 
         Args:
           page: 目标页面 id。
+          attempts: 最多尝试次数。
 
         Returns:
           实际走过的 ``Path``。
         """
-        return self.navigator.goto(page)
+        last: NavError | None = None
+        for index in range(1, attempts + 1):
+            try:
+                return self.navigator.goto(page)
+            except NavError as error:
+                last = error
+                self.log_warning(f'nav: goto {page} 第 {index} 次失败，退回重试: {error}')
+                self.back()
+                self.sleep(1.0)
+                self._locator = None
+                self._navigator = None
+        raise last
 
     def ensure_page(self, page: str):
         """确保位于指定页面；已在目标页时不移动。"""
@@ -300,6 +318,67 @@ class MyBaseTask(BaseTask):
         hit = condition(self) if callable(condition) else bool(condition)
         if hit:
             raise FlowAborted(reason)
+
+    @property
+    def helper_sources(self):
+        """``config['helper_tasks']``：可调用的辅助任务列表。"""
+        config = getattr(self.executor, 'config', None) or {}
+        return tuple(config.get('helper_tasks') or ())
+
+    def call_task(self, target, **kwargs):
+        """同步调用另一个任务，并取回它的返回值。
+
+        Args:
+          target: 辅助任务名（见 ``config['helper_tasks']``）或任务类。
+          **kwargs: 传给被调用任务 ``execute`` 的参数。
+
+        Returns:
+          被调用任务的 ``execute`` 返回值。
+
+        Raises:
+          TaskCallError: 调用层数超限、目标无法解析或内层任务抛错。
+        """
+        from src.runtime import helpers
+        from src.runtime.callable import MAX_CALL_DEPTH, TaskCallError
+
+        depth = self._call_depth + 1
+        if depth > MAX_CALL_DEPTH:
+            raise TaskCallError(f'任务调用层数超过 {MAX_CALL_DEPTH}（{self.name} -> {target}）')
+        if isinstance(target, str):
+            try:
+                cls = helpers.resolve(target, sources=self.helper_sources)
+            except LookupError as error:
+                raise TaskCallError(str(error)) from error
+        elif inspect.isclass(target):
+            cls = target
+        else:
+            raise TaskCallError(f'call_task 需要任务名或任务类，收到 {target!r}')
+        name = cls.__name__
+        if kwargs and not hasattr(cls, 'bind_params'):
+            raise TaskCallError(f'{name} 不是 CallableTask，不能传参 {sorted(kwargs)}')
+
+        inner = cls(executor=self.executor, app=getattr(self, '_app', None))
+        inner._call_depth = depth
+        inner.data = {}
+        inner.result = None
+        if kwargs:
+            inner.call_params = dict(kwargs)
+        if self._navigator is not None:
+            inner._nav_hint = self._navigator.last_page
+        self.log_info(f'call: {self.name} -> {name} {kwargs or ""}'.strip())
+        try:
+            inner.run()
+        except Exception as error:
+            self.screenshot(f'call_failed_{name}')
+            raise TaskCallError(f'{self.name} -> {name}: {error}') from error
+        finally:
+            navigator = inner.__dict__.get('_navigator')
+            page = getattr(navigator, 'last_page', '') if navigator is not None else ''
+            if page:
+                self._nav_hint = page
+                if self._navigator is not None:
+                    self._navigator.last_page = page
+        return inner.result
 
     def wait_template(self, template: str, timeout: float = DEFAULT_WAIT_TIMEOUT) -> bool:
         """等待模板出现。

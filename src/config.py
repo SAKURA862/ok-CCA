@@ -85,6 +85,8 @@ config = {
         'settle_time': 0.3,  # 判定「已到达」所需的稳定时间（秒）
         'max_hops': 6,  # 单次寻路的最大跳数
     },
+    # 可被 call_task 调用的辅助任务：'module:Class'，不进入 GUI/MCP 任务列表
+    'helper_tasks': [],
     'gui': gui_config,
     'config_folder': 'configs', #最好不要修改
     'global_configs': [key_config_option],
