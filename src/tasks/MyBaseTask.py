@@ -16,6 +16,7 @@ from src.nav.model import NavError
 from src.nav.navigator import NavCache, Navigator
 from src.nav import registry as nav_registry
 from src.runtime import daily, overlay
+from src.runtime.session import session
 from src.tasks import bootstrap
 
 
@@ -78,11 +79,16 @@ class MyBaseTask(BaseTask):
         cls.run = run
 
     def ensure_game_ready(self):
-        """确保游戏就绪；同一次 run 内只执行一次。"""
+        """确保游戏就绪；批次内只检查一次，失败时让下一个任务重查。"""
         if self._bootstrap_done or self.SKIP_GAME_BOOTSTRAP:
             return None
+        try:
+            result = bootstrap.ensure_ready(self)
+        except Exception:
+            session.invalidate()
+            raise
         self._bootstrap_done = True
-        return bootstrap.ensure_ready(self)
+        return result
 
     # ------------------------------------------------------------------ 弹窗层
     @property

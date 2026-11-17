@@ -1,0 +1,8 @@
+{
+  "name": "交错战线",
+  "package": "com.megagame.crosscore",
+  "launch": { "kind": "android_app" },
+  "stop": { "kind": "force_stop" },
+  "login": { "template": "nav_start_button" },
+  "ready": { "template": "nav_lobby_anchor" }
+}

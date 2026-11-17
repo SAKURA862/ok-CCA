@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.games import base as game_base
+from src.runtime import game
 from src.tasks import bootstrap
 from src.tasks.MyBaseTask import MyBaseTask
 
@@ -94,8 +95,8 @@ def check(name, fn):
 
 def _patch(adapter):
     """绕过 registry 的文件导入，直接把实例塞给 bootstrap.create。"""
-    original = bootstrap.create
-    bootstrap.create = lambda profile: adapter if profile == 'fake' else original(profile)
+    original = game.create
+    game.create = lambda profile: adapter if profile == 'fake' else original(profile)
     return original
 
 
@@ -106,7 +107,7 @@ def case_already_ready():
         task = FakeTask({'game_profile': 'fake'})
         result = bootstrap.ensure_ready(task)
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert result is game_base.BootstrapResult.ALREADY_READY, result
     assert adapter.launched == 0, '已就绪却又拉起了进程'
     assert adapter.tapped == 0
@@ -121,7 +122,7 @@ def case_launch_then_tap():
         task.run_overlays = lambda when: after_login.append(when)
         result = bootstrap.ensure_ready(task)
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert result is game_base.BootstrapResult.LAUNCHED, result
     assert adapter.launched == 1, f'launch 次数应为 1，实际 {adapter.launched}'
     assert adapter.tapped == 1, f'tap 次数应为 1，实际 {adapter.tapped}'
@@ -135,7 +136,7 @@ def case_already_running_at_login():
         task = FakeTask({'game_profile': 'fake'})
         result = bootstrap.ensure_ready(task)
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert result is game_base.BootstrapResult.TAPPED, result
     assert adapter.launched == 0, '停在登录页时不应重启进程'
 
@@ -153,7 +154,7 @@ def case_loading_until_timeout():
         else:
             raise AssertionError('加载页超时没有抛 BootstrapError')
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert task.shots, '超时失败必须留下截图'
 
 
@@ -170,7 +171,7 @@ def case_tap_has_no_effect():
         else:
             raise AssertionError('点击无效时没有抛错')
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert task.shots, '点击无效时必须留下截图'
 
 
@@ -181,7 +182,7 @@ def case_no_profile():
         task = FakeTask({})
         result = bootstrap.ensure_ready(task)
     finally:
-        bootstrap.create = restore
+        game.create = restore
     assert result is game_base.BootstrapResult.SKIPPED, result
     assert adapter.launched == 0
 

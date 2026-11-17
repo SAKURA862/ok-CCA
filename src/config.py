@@ -65,12 +65,17 @@ config = {
     'debug': False,  # Optional, default: False
     # 游戏适配器名字（在 src/games/registry.py 里注册）。空 = 不启用启动层。
     'game_profile': '',
+    # 适配器也可以写在这里：{"crosscore": "src.games.crosscore:CrossCoreAdapter"}
+    'game_profiles': {},
     # 启动层参数，单位秒。boot_timeout: 拉起进程到出现登录页；enter_timeout: 点登录到进入游戏
     'game_bootstrap': {
         'boot_timeout': 180,
         'enter_timeout': 90,
         'poll_interval': 0.6,
-        'force_restart': False,  # True = 每次运行前重启游戏
+        'force_restart': False,   # True = 每次运行前重启游戏
+        'confirm_hits': 2,        # 连续命中几次「就绪」才算完成，避免过场假象
+        'dismiss_interval': 5.0,  # 等待期两次弹窗纠偏的最小间隔（秒）
+        'max_dismiss': 12,        # 单次启动最多纠偏几次，防止死循环
     },
     # 弹窗层：随时弹出的窗口（网络错误、公告、签到）在这里统一处理
     'overlays': {
