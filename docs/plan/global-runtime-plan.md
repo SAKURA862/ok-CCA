@@ -49,18 +49,25 @@ dev           aabb9f1  ← base_frame + 交错战线启动任务
 | 阶段 | 内容 | 规模 | 交付物 |
 | --- | --- | --- | --- |
 | P0 | 基线整理：分支、设计稿入库、跑通现状 ✅ | S | `docs/plan/`、`docs/design/` 两份 HTML |
-| P1 | A 启动层 ✅ | M | `src/games/`、`src/tasks/bootstrap.py`、`MyBaseTask` 包装 |
+| P1 | A 启动层 ✅（`dafec23`） | M | `src/runtime/game.py`、`src/runtime/session.py`、`src/games/{profile,template,registry}.py`、`assets/games/<profile>.json` |
 | P2 | B 弹窗层 ✅ | M | `src/runtime/overlay.py`、`src/runtime/daily.py`、`assets/overlays.example.json` |
 | P3 | C 导航层（页面图 + 寻路） | L | `src/nav/`、`assets/nav/<profile>.json`、`configs/nav_cache.json` |
 | P3.5 | 编排层（Flow / Step）✅ | M | `src/flow/steps.py`、`MyBaseTask.build_flow()` |
 | P3.6 | 任务调用任务（helper task） | S | `src/runtime/callable.py`、`src/runtime/helpers.py`、`MyBaseTask.call_task()` |
 | P3.7 | 战斗 / 扫荡 / 战利品（任务形式） | M | `BattleTask`、`SweepTask`、`LootTask` |
 | P3.8 | 战利品策略（上锁） | S | `LootPolicy`、`LockGoodChips` |
-| P4 | 详情页「运行一次」+ 批量联动 | S | `src/ui/task_settings_tab.py`、`src/ui/home_tab.py` |
+| P4 | 详情页「运行一次」+ 批量联动 ⏸（GUI 冻结） | S | `src/ui/task_settings_tab.py`、`src/ui/home_tab.py` |
 | P5 | 交错战线落地（dev） | M | `src/games/crosscore.py`、删除旧启动任务 |
 | P6 | 文档与收尾 | S | `docs/crosscore.md`、`docs/framework.md`、截图 |
 
 规模说明：S ≈ 半天内、M ≈ 1 天、L ≈ 2–3 天（含标定与验证）。
+> **不新增 GUI 控件（2026-11-18）**：用户要求现在**不在界面上增加任何控件**，因此原拟的
+> P1.3（「启动 / 关闭 / 重启」三个按钮）**从计划中删除**；P4 等涉及界面改动的阶段统一
+> 推迟到后续版本（不是取消）。
+>
+> 但这不影响既有链路：一键完成日常与单个任务执行仍然**照常调用启动服务**——它们都走
+> `MyBaseTask.__init_subclass__` 包装后的 `run()` → `ensure_game_ready()` → `game.start()`，
+> 与有没有按钮无关；CLI / MCP 同理。生命周期服务本身由 `src/runtime/game.py` 提供。
 
 ## 3. 各阶段细节
 

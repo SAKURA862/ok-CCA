@@ -58,28 +58,36 @@ class DailyRunThread(QThread):
         self._tasks = list(tasks)
 
     def run(self):
+        """依次执行任务；整批共用一次启动检查。"""
+
+        from src.runtime.session import session
+
         total = len(self._tasks)
-        for index, task in enumerate(self._tasks, 1):
-            self.progress.emit(task.name, index, total)
-            done = threading.Event()
+        session.begin_batch()
+        try:
+            for index, task in enumerate(self._tasks, 1):
+                self.progress.emit(task.name, index, total)
+                done = threading.Event()
 
-            def on_done(finished_task, _task=task, _done=done):
-                if finished_task is _task:
-                    _done.set()
+                def on_done(finished_task, _task=task, _done=done):
+                    if finished_task is _task:
+                        _done.set()
 
-            communicate.task_done.connect(on_done)
-            try:
-                og.app.start_controller.start(task)
-                finished = done.wait(timeout=1800)
-            except Exception as error:  # noqa: BLE001 - 直接反馈给界面
-                self.failed.emit(f'{task.name} 启动失败：{error}')
-                return
-            finally:
-                communicate.task_done.disconnect(on_done)
-            if not finished:
-                self.failed.emit(f'{task.name} 执行超时')
-                return
-            daily_state.mark_done(task)
+                communicate.task_done.connect(on_done)
+                try:
+                    og.app.start_controller.start(task)
+                    finished = done.wait(timeout=1800)
+                except Exception as error:  # noqa: BLE001 - 直接反馈给界面
+                    self.failed.emit(f'{task.name} 启动失败：{error}')
+                    return
+                finally:
+                    communicate.task_done.disconnect(on_done)
+                if not finished:
+                    self.failed.emit(f'{task.name} 执行超时')
+                    return
+                daily_state.mark_done(task)
+        finally:
+            session.end_batch()
 
 
 class TaskTile(RoundedCard):
